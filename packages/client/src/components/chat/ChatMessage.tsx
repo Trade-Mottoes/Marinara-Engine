@@ -502,7 +502,7 @@ export const ChatMessage = memo(function ChatMessage({
   if (isSystem) {
     return (
       <div className="flex justify-center py-2">
-        <div className="rounded-full bg-[var(--secondary)]/80 px-4 py-1.5 text-[11px] text-[var(--muted-foreground)] backdrop-blur-sm">
+        <div className="rounded-full bg-[var(--secondary)] px-4 py-1.5 text-[11px] text-[var(--muted-foreground)]">
           {message.content}
         </div>
       </div>
@@ -520,7 +520,7 @@ export const ChatMessage = memo(function ChatMessage({
           className="rpg-narrator-msg group animate-message-in mb-4 px-2"
           style={{ animationDelay: `${Math.min(index * 30, 200)}ms`, animationFillMode: "backwards" }}
         >
-          <div className="relative rounded-xl border border-amber-500/10 bg-black/30 px-5 py-4 backdrop-blur-md">
+          <div className="relative rounded-xl border border-amber-500/10 bg-black/40 px-5 py-4">
             {/* Delete button */}
             {onDelete && (
               <button
@@ -633,7 +633,7 @@ export const ChatMessage = memo(function ChatMessage({
             {/* Message bubble */}
             <div
               className={cn(
-                "relative rounded-2xl px-4 py-3 backdrop-blur-md",
+                "relative rounded-2xl px-4 py-3",
                 isUser
                   ? "rounded-tr-sm text-neutral-100 ring-1 ring-white/10"
                   : "rounded-tl-sm text-white/90 ring-1 ring-white/8",

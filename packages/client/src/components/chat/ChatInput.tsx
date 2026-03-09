@@ -244,7 +244,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
           "relative flex items-center gap-2 rounded-2xl border-2 px-4 py-3 transition-all duration-200",
           isRP
             ? cn(
-                "bg-transparent backdrop-blur-md",
+                "bg-black/40",
                 hasInput ? "border-blue-400/30 shadow-md shadow-blue-500/5" : "border-white/10",
               )
             : cn(
