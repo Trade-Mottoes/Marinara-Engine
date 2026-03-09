@@ -155,6 +155,7 @@ interface UIState {
   setHudPosition: (v: HudPosition) => void;
   setActiveCustomTheme: (id: string | null) => void;
   addCustomTheme: (theme: CustomTheme) => void;
+  updateCustomTheme: (id: string, patch: Partial<Pick<CustomTheme, "name" | "css">>) => void;
   removeCustomTheme: (id: string) => void;
   addExtension: (ext: InstalledExtension) => void;
   removeExtension: (id: string) => void;
@@ -363,6 +364,10 @@ export const useUIStore = create<UIState>()(
       setHudPosition: (v) => set({ hudPosition: v }),
       setActiveCustomTheme: (id) => set({ activeCustomTheme: id }),
       addCustomTheme: (theme) => set((s) => ({ customThemes: [...s.customThemes, theme] })),
+      updateCustomTheme: (id, patch) =>
+        set((s) => ({
+          customThemes: s.customThemes.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+        })),
       removeCustomTheme: (id) =>
         set((s) => ({
           customThemes: s.customThemes.filter((t) => t.id !== id),

@@ -11,7 +11,7 @@ import {
 import { cn } from "../../lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api-client";
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   Upload,
   X,
@@ -30,6 +30,11 @@ import {
   AlertTriangle,
   Tag,
   Pencil,
+  Code,
+  Plus,
+  Save,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { useClearAllData } from "../../hooks/use-chats";
 import { useChatStore } from "../../stores/chat.store";
@@ -658,8 +663,64 @@ function ThemesSettings() {
   const activeCustomTheme = useUIStore((s) => s.activeCustomTheme);
   const setActiveCustomTheme = useUIStore((s) => s.setActiveCustomTheme);
   const addCustomTheme = useUIStore((s) => s.addCustomTheme);
+  const updateCustomTheme = useUIStore((s) => s.updateCustomTheme);
   const removeCustomTheme = useUIStore((s) => s.removeCustomTheme);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Editor state
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null); // null = creating new
+  const [themeName, setThemeName] = useState("");
+  const [themeCss, setThemeCss] = useState("");
+  const [livePreview, setLivePreview] = useState(true);
+
+  // Inject live preview CSS
+  useEffect(() => {
+    if (!editorOpen || !livePreview) {
+      const el = document.getElementById("marinara-css-editor-preview");
+      if (el) el.textContent = "";
+      return;
+    }
+    let style = document.getElementById("marinara-css-editor-preview") as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "marinara-css-editor-preview";
+      document.head.appendChild(style);
+    }
+    style.textContent = themeCss;
+    return () => { style!.textContent = ""; };
+  }, [editorOpen, livePreview, themeCss]);
+
+  const openNewTheme = useCallback(() => {
+    setEditingId(null);
+    setThemeName("");
+    setThemeCss(CSS_TEMPLATE);
+    setEditorOpen(true);
+  }, []);
+
+  const openEditTheme = useCallback((theme: CustomTheme) => {
+    setEditingId(theme.id);
+    setThemeName(theme.name);
+    setThemeCss(theme.css);
+    setEditorOpen(true);
+  }, []);
+
+  const handleSave = useCallback(() => {
+    const name = themeName.trim() || "Untitled Theme";
+    if (editingId) {
+      updateCustomTheme(editingId, { name, css: themeCss });
+    } else {
+      const theme: CustomTheme = {
+        id: crypto.randomUUID(),
+        name,
+        css: themeCss,
+        installedAt: new Date().toISOString(),
+      };
+      addCustomTheme(theme);
+      setActiveCustomTheme(theme.id);
+    }
+    setEditorOpen(false);
+  }, [editingId, themeName, themeCss, addCustomTheme, updateCustomTheme, setActiveCustomTheme]);
 
   const handleImportTheme = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -667,7 +728,6 @@ function ThemesSettings() {
     try {
       const text = await file.text();
 
-      // Check if it's a JSON theme definition
       if (file.name.endsWith(".json")) {
         const parsed = JSON.parse(text);
         const theme: CustomTheme = {
@@ -678,7 +738,6 @@ function ThemesSettings() {
         };
         addCustomTheme(theme);
       } else {
-        // Treat as raw CSS file
         const theme: CustomTheme = {
           id: crypto.randomUUID(),
           name: file.name.replace(/\.css$/, ""),
@@ -693,20 +752,113 @@ function ThemesSettings() {
     e.target.value = "";
   };
 
+  // ── CSS Editor View ──
+  if (editorOpen) {
+    return (
+      <div className="flex flex-col gap-3 animate-fade-in-up">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setEditorOpen(false)}
+              className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+            >
+              <X size={14} />
+            </button>
+            <span className="text-xs font-semibold">{editingId ? "Edit Theme" : "New Theme"}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setLivePreview(!livePreview)}
+              className={cn(
+                "flex items-center gap-1 rounded-md px-2 py-1 text-[10px] transition-colors",
+                livePreview
+                  ? "bg-emerald-500/15 text-emerald-400"
+                  : "bg-[var(--secondary)] text-[var(--muted-foreground)]",
+              )}
+              title={livePreview ? "Disable live preview" : "Enable live preview"}
+            >
+              {livePreview ? <Eye size={11} /> : <EyeOff size={11} />}
+              Preview
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 py-1 text-[10px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 active:scale-95"
+            >
+              <Save size={11} />
+              Save
+            </button>
+          </div>
+        </div>
+
+        {/* Theme name */}
+        <input
+          type="text"
+          value={themeName}
+          onChange={(e) => setThemeName(e.target.value)}
+          placeholder="Theme name..."
+          className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-xs text-[var(--foreground)] outline-none transition-colors focus:border-[var(--primary)]/50"
+        />
+
+        {/* CSS textarea */}
+        <textarea
+          value={themeCss}
+          onChange={(e) => setThemeCss(e.target.value)}
+          spellCheck={false}
+          className="min-h-[360px] resize-y rounded-lg border border-[var(--border)] bg-[#0d1117] p-3 font-mono text-[11px] leading-relaxed text-emerald-300 outline-none transition-colors focus:border-[var(--primary)]/50 placeholder:text-white/20"
+          placeholder="/* Enter your CSS here... */"
+        />
+
+        {/* Quick reference */}
+        <details className="group rounded-lg bg-[var(--secondary)]/50 ring-1 ring-[var(--border)]">
+          <summary className="cursor-pointer px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
+            CSS Variable Reference
+          </summary>
+          <div className="border-t border-[var(--border)] px-3 py-2 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+              <span>--background</span><span className="text-white/40">Page background</span>
+              <span>--foreground</span><span className="text-white/40">Main text</span>
+              <span>--primary</span><span className="text-white/40">Accent / buttons</span>
+              <span>--primary-foreground</span><span className="text-white/40">Text on primary</span>
+              <span>--secondary</span><span className="text-white/40">Cards / inputs</span>
+              <span>--card</span><span className="text-white/40">Card background</span>
+              <span>--border</span><span className="text-white/40">Borders</span>
+              <span>--muted-foreground</span><span className="text-white/40">Dimmed text</span>
+              <span>--sidebar</span><span className="text-white/40">Sidebar bg</span>
+              <span>--sidebar-border</span><span className="text-white/40">Sidebar border</span>
+              <span>--destructive</span><span className="text-white/40">Error / delete</span>
+              <span>--popover</span><span className="text-white/40">Dropdown bg</span>
+              <span>--accent</span><span className="text-white/40">Hover highlights</span>
+            </div>
+          </div>
+        </details>
+      </div>
+    );
+  }
+
+  // ── Theme List View ──
   return (
     <div className="flex flex-col gap-4 animate-fade-in-up">
       <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
         <Palette size={12} />
-        Import custom CSS themes to personalize the look and feel.
+        Create or import custom CSS themes to personalize the look and feel.
       </div>
 
-      {/* Import button */}
-      <button
-        onClick={() => fileRef.current?.click()}
-        className="flex items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-[var(--border)] p-3 text-xs text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:bg-[var(--secondary)]/50"
-      >
-        <Upload size={14} /> Import Theme (.css or .json)
-      </button>
+      {/* Action buttons */}
+      <div className="flex gap-2">
+        <button
+          onClick={openNewTheme}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-[var(--primary)]/30 bg-[var(--primary)]/5 p-3 text-xs text-[var(--primary)] transition-all hover:border-[var(--primary)]/50 hover:bg-[var(--primary)]/10"
+        >
+          <Plus size={14} /> Create Theme
+        </button>
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-[var(--border)] p-3 text-xs text-[var(--muted-foreground)] transition-all hover:border-[var(--primary)]/40 hover:bg-[var(--secondary)]/50"
+        >
+          <Upload size={14} /> Import File
+        </button>
+      </div>
       <input ref={fileRef} type="file" accept=".css,.json" className="hidden" onChange={handleImportTheme} />
 
       {/* Active theme: None option */}
@@ -737,10 +889,17 @@ function ThemesSettings() {
                 : "bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--accent)]",
             )}
           >
-            <button onClick={() => setActiveCustomTheme(t.id)} className="flex flex-1 items-center gap-2">
-              <FileCode2 size={12} />
+            <button onClick={() => setActiveCustomTheme(t.id)} className="flex flex-1 items-center gap-2 min-w-0">
+              <FileCode2 size={12} className="shrink-0" />
               <span className="truncate">{t.name}</span>
-              {activeCustomTheme === t.id && <Check size={12} />}
+              {activeCustomTheme === t.id && <Check size={12} className="shrink-0" />}
+            </button>
+            <button
+              onClick={() => openEditTheme(t)}
+              className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--primary)]/10 hover:text-[var(--primary)]"
+              title="Edit theme CSS"
+            >
+              <Code size={11} />
             </button>
             <button
               onClick={() => {
@@ -757,7 +916,7 @@ function ThemesSettings() {
 
         {customThemes.length === 0 && (
           <p className="py-2 text-center text-[10px] text-[var(--muted-foreground)]">
-            No custom themes installed yet. Import a .css or .json theme file above.
+            No custom themes installed yet. Create one or import a .css file above.
           </p>
         )}
       </div>
@@ -772,6 +931,38 @@ function ThemesSettings() {
     </div>
   );
 }
+
+const CSS_TEMPLATE = `/* ═══════════════════════════════════════
+   My Custom Theme
+   ═══════════════════════════════════════ */
+
+:root {
+  /* ── Core Colors ── */
+  /* --background: #0a0a0f; */
+  /* --foreground: #e4e4e7; */
+  /* --primary: #a78bfa; */
+  /* --primary-foreground: #fff; */
+
+  /* ── Surface Colors ── */
+  /* --card: #111118; */
+  /* --secondary: #1a1a24; */
+  /* --accent: #252534; */
+  /* --popover: #111118; */
+
+  /* ── Borders ── */
+  /* --border: #27272a; */
+  /* --sidebar-border: #27272a; */
+
+  /* ── Text ── */
+  /* --muted-foreground: #71717a; */
+
+  /* ── Sidebar ── */
+  /* --sidebar: #0c0c12; */
+}
+
+/* Uncomment and edit the variables above.
+   You can also add any custom CSS below: */
+`;
 
 function ExtensionsSettings() {
   const extensions = useUIStore((s) => s.installedExtensions);
