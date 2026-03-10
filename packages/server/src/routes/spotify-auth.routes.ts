@@ -12,9 +12,10 @@ const pendingAuth = new Map<
 >();
 
 const PORT = parseInt(process.env.PORT ?? "7860", 10);
+const PROTOCOL = process.env.SSL_CERT && process.env.SSL_KEY ? "https" : "http";
 
 function getRedirectUri(): string {
-  return `http://127.0.0.1:${PORT}/api/spotify/callback`;
+  return `${PROTOCOL}://127.0.0.1:${PORT}/api/spotify/callback`;
 }
 
 const SPOTIFY_SCOPES = [

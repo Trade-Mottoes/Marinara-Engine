@@ -23,6 +23,7 @@ export interface SlashCommandContext {
     connectionId: string | null;
     userMessage?: string;
     impersonate?: boolean;
+    attachments?: { type: string; data: string }[];
   }) => Promise<void>;
   /** Insert a message directly into the chat (no LLM) */
   createMessage: (data: { role: string; content: string; characterId?: string | null }) => void;

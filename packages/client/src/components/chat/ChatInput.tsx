@@ -102,6 +102,7 @@ export function ChatInput({ mode = "conversation", characterNames = [] }: ChatIn
       }
       setHasInput(false);
       setCompletions([]);
+      setAttachments([]);
 
       const result = await match.command.execute(match.args, ctx);
       if (result.feedback) {

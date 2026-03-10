@@ -129,8 +129,8 @@ export async function generateRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: "Chat not found" });
     }
 
-    // Save user message (if provided) — skip for impersonate (no real user message to save)
-    if (input.userMessage && !input.impersonate) {
+    // Save user message — skip for impersonate (no real user message to save)
+    if (!input.impersonate && (input.userMessage || input.attachments?.length)) {
       // ── Commit game state: lock in the game state the user was seeing ──
       // Find the last assistant message's active swipe and commit its game state.
       // This ensures swipes/regens always use the state from the user's accepted turn.
@@ -148,7 +148,7 @@ export async function generateRoutes(app: FastifyInstance) {
         chatId: input.chatId,
         role: "user",
         characterId: null,
-        content: input.userMessage,
+        content: input.userMessage ?? "",
       });
 
       // Store attachments in message extra if present
@@ -1411,7 +1411,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   temperature: newTemperature,
                   presentCharacters: (gs.presentCharacters as any[]) ?? [],
                   recentEvents: (gs.recentEvents as string[]) ?? [],
-                  playerStats: null,
+                  playerStats: (gs.playerStats as any[]) ?? (prevSnap?.playerStats ? (typeof prevSnap.playerStats === "string" ? JSON.parse(prevSnap.playerStats) : prevSnap.playerStats) : null),
                   personaStats: (gs.personaStats as any[]) ?? null,
                 },
                 manualOverrides,
