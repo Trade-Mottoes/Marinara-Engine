@@ -14,35 +14,20 @@ Everything runs locally. No accounts, no cloud, no telemetry. Connect to any Ope
 
 ### v1.3.0
 
-**Changes:**
-- **Removed Electron** — The app is now fully browser-based with PWA support. No desktop wrapper needed.
+**Added:**
+- Character tags.
+- Peek Prompt now shows parameters sent to the model.
+- Images from the gallery can be displayed in the chat area.
 
-### v1.2.1
+**Changes:**
+- The app is now fully browser-based with PWA support. No desktop wrapper needed. Should work on Termux.
 
 **Fixes:**
-- **ST Preset Import Order** — Imported SillyTavern presets now preserve the exact section ordering from `prompt_order` instead of using the definition order.
-- **ST Preset Name Import** — Preset names are now correctly extracted from Read-Me comments (e.g. "Marinara's Spaghetti Recipe") and from the filename, instead of defaulting to "SillyTavern Preset."
-- **Custom Provider Model Selector** — The search input now receives focus immediately when the dropdown opens, so you can click and type instead of needing Shift+Tab.
-
-### v1.2.0
-
-**New Features:**
-- **Pinned Gallery Images** — Pin generated images to the chat area as draggable, resizable floating overlays that persist even when the gallery drawer is closed.
-- **Agent Activity Button** — New Sparkles button in the chat header (both roleplay and conversation modes) shows agent results grouped by phase (Pre-Generation, Parallel, Post-Processing) with a badge count.
-- **Agent Error Toasts** — Generation failures and individual agent errors now show toast notifications instead of silently failing.
-- **Agent Auto-Retry** — Failed agents are automatically retried once during generation. If they still fail, a manual Retry button appears in the chat header.
-- **Tracker Widgets in Conversation Mode** — The RoleplayHUD tracker widgets (location, time, weather, inventory, quests, etc.) now appear in conversation mode too when agents are enabled.
-
-**Improvements:**
-- **Connection Moved Up** — The Connection selector in Chat Settings is now the first thing after Chat Name for faster setup.
-- **Toggle Styling Fix** — Fixed all 4 toggle switches in Chat Settings (Enable Tools, Enable Agents, Color Dialogues, Context Limit) — the knob no longer overflows the track.
-- **Open Fonts Folder Fix** — Fixed the "Open Fonts Folder" button in Settings not working due to a double `/api` prefix.
-
-**Bug Fixes:**
-- Fixed generation errors being silently swallowed — now shows error toasts via Sonner.
-- Fixed `requestAnimationFrame` type error in the streaming code.
-- Fixed gallery images disappearing when the gallery drawer was closed (moved to Zustand store).
-- Fixed chat Settings drawer not showing the Connection selector in a prominent position.
+- Various agent fixes, especially to Spotify DJ one.
+- Reworked prompts for agents.
+- Installers fixed.
+- Importing presets and chats now works correctly.
+- Various major and minor bug fixes.
 
 ---
 
@@ -232,6 +217,8 @@ Copy `.env.example` to `.env` to customize:
 | `ENCRYPTION_KEY` | *(empty)* | AES key for API key encryption (generate with `openssl rand -hex 32`) |
 | `LOG_LEVEL` | `info` | Logging verbosity |
 | `CORS_ORIGINS` | `http://localhost:5173` | Allowed CORS origins |
+| `SSL_CERT` | *(empty)* | Path to TLS certificate (e.g. `fullchain.pem`). Set both `SSL_CERT` and `SSL_KEY` to enable HTTPS |
+| `SSL_KEY` | *(empty)* | Path to TLS private key (e.g. `privkey.pem`) |
 
 ---
 
