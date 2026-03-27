@@ -106,11 +106,11 @@ async function expandCharacter(config: MarkerConfig, ctx: MarkerContext): Promis
       }
     }
 
-    // Auto-include stats if rpgStats is enabled and not already in fields
-    if (!fields.includes("stats")) {
+    // Auto-include RPG attributes if enabled and not already in fields
+    if (!fields.includes("stats") && !fields.includes("rpg_attributes")) {
       const statsText = formatRPGStats(data.extensions?.rpgStats as RPGStatsConfig | undefined);
       if (statsText) {
-        charParts.push(wrapContent(statsText, "stats", ctx.wrapFormat, 2));
+        charParts.push(wrapContent(statsText, "rpg_attributes", ctx.wrapFormat, 2));
       }
     }
 
