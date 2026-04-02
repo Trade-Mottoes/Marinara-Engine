@@ -155,8 +155,18 @@ export async function charactersRoutes(app: FastifyInstance) {
   });
 
   app.post("/personas", async (req) => {
-    const { name, description } = req.body as { name: string; description?: string };
-    return storage.createPersona(name, description ?? "");
+    const { name, description, ...extra } = req.body as {
+      name: string;
+      description?: string;
+      personality?: string;
+      scenario?: string;
+      backstory?: string;
+      appearance?: string;
+      nameColor?: string;
+      dialogueColor?: string;
+      boxColor?: string;
+    };
+    return storage.createPersona(name, description ?? "", undefined, extra);
   });
 
   app.patch<{ Params: { id: string } }>("/personas/:id", async (req) => {
