@@ -815,16 +815,250 @@ const wyvernProvider: ProviderConfig = {
 };
 
 // ════════════════════════════════════════════════
+// Provider: JanitorAI
+// ════════════════════════════════════════════════
+
+// JanitorAI official tag slug → ID map (from /hampter/tags API)
+const JANITOR_OFFICIAL_TAGS: Record<string, number> = {
+  "male": 1, "female": 2, "non-binary": 3, "nonbinary": 3,
+  "celebrity": 4, "oc": 5, "fictional": 6, "real": 7,
+  "game": 8, "anime": 9, "historical": 10, "royalty": 11,
+  "detective": 12, "hero": 13, "villain": 14, "magical": 15,
+  "non-human": 16, "nonhuman": 16, "monster": 17, "monster girl": 18, "monstergirl": 18,
+  "alien": 19, "robot": 20, "politics": 21, "vampire": 22,
+  "giant": 23, "openai": 24, "oai": 24, "elf": 25,
+  "multiple": 26, "multiplepeople": 26, "vtuber": 27,
+  "dominant": 28, "submissive": 29, "scenario": 30,
+  "pokemon": 31, "assistant": 32, "non-english": 34, "nonenglish": 34,
+  "philosophy": 36, "rpg": 38, "religion": 39,
+  "books": 41, "anypov": 42, "angst": 43, "demi-human": 44, "demihuman": 44,
+  "enemies to lovers": 45, "enemiestolovers": 45, "smut": 46,
+  "mlm": 47, "wlw": 48, "dead dove": 49, "deaddove": 49,
+  "fluff": 50, "horror": 51, "comedy": 52, "furry": 53,
+  "fempov": 54, "malepov": 55, "switch": 56, "trans": 57,
+  "the beginning": 59, "thebeginning": 59, "sci-fi": 60, "scifi": 60,
+  "music mania": 61, "musicmania": 61,
+};
+
+// Also keep a dynamic map for any new tags added after this code was written
+const JANITOR_DYNAMIC_TAGS: Record<string, number> = {};
+
+function janitorTagNameToId(name: string): number | undefined {
+  const key = name.toLowerCase().replace(/^#/, "").trim();
+  return JANITOR_OFFICIAL_TAGS[key] ?? JANITOR_DYNAMIC_TAGS[key];
+}
+
+function janitorBuildTagMap(hits: any[]) {
+  for (const h of hits) {
+    for (const t of (h.tags || [])) {
+      if (t.id && t.name) {
+        const clean = (t.name as string).replace(/^[^\w]*\s*/, "").toLowerCase();
+        if (!JANITOR_OFFICIAL_TAGS[clean] && !JANITOR_DYNAMIC_TAGS[clean]) {
+          JANITOR_DYNAMIC_TAGS[clean] = t.id;
+        }
+        // Also add slug variant
+        if (t.slug && !JANITOR_OFFICIAL_TAGS[t.slug] && !JANITOR_DYNAMIC_TAGS[t.slug]) {
+          JANITOR_DYNAMIC_TAGS[t.slug] = t.id;
+        }
+      }
+    }
+  }
+}
+
+
+const janitorProvider: ProviderConfig = {
+  id: "janitor",
+  name: "JanitorAI",
+  icon: "🧹",
+  siteName: "JanitorAI",
+  defaultSort: "popular",
+  sortOptions: [
+    { value: "popular", label: "🔥 Most Popular", group: "Popular" },
+    { value: "trending", label: "📈 Trending", group: "Popular" },
+    { value: "trending24", label: "⚡ Trending 24h", group: "Popular" },
+    { value: "latest", label: "🆕 Newest", group: "Date" },
+    { value: "relevance", label: "🔍 Relevance", group: "Search" },
+  ],
+  features: [],
+  hasSortDirection: false,
+  hasTokenFilters: false,
+  extraToggles: [],
+  nsfwAvailable: true,
+  nsfwMode: "free",
+  getAvatarUrl: (card) => {
+    const raw = card._raw as any;
+    const av = raw?.avatar;
+    if (!av) return "";
+    return `/api/bot-browser/janitor/avatar/${av}`;
+  },
+
+  getExternalUrl: (card) => {
+    const raw = card._raw as any;
+    const slug = (card.name || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    return `https://janitorai.com/characters/${raw?.id || card.id}_character-${slug}`;
+  },
+  
+  search: async (p) => {
+    const parts = [
+      `search=${encodeURIComponent(p.query)}`,
+      `page=${p.page}`,
+      `sort=${encodeURIComponent(p.sort)}`,
+      `mode=all`,
+    ];
+
+    // Tags: official tags use tag_id param, custom hashtag tags use custom_tags param
+    if (p.includeTags.length > 0) {
+      const officialIds: number[] = [];
+      const customNames: string[] = [];
+      for (const tag of p.includeTags) {
+        const id = janitorTagNameToId(tag);
+        if (id !== undefined) {
+          officialIds.push(id);
+        } else {
+          customNames.push(tag.replace(/^#/, "").trim());
+        }
+      }
+      if (officialIds.length > 0) {
+        parts.push(`tag_id=${officialIds.join(",")}`);
+      }
+      if (customNames.length > 0) {
+        parts.push(`custom_tags=${encodeURIComponent(customNames.join(","))}`);
+      }
+    }
+
+    const url = `/api/bot-browser/janitor/search?${parts.join("&")}`;
+    const res = await fetch(url);
+
+	
+	
+    if (!res.ok) throw new Error("Search failed");
+    const data = await res.json();
+    const hits = data?.data || [];
+    const total = data?.total || 0;
+
+    // Build tag lookup from results so future tag clicks work
+    janitorBuildTagMap(hits);
+
+    // Client-side exclude tag filtering
+    let filtered = hits;
+    if (p.excludeTags.length > 0) {
+      const lowerExclude = p.excludeTags.map((t: string) => t.toLowerCase());
+      filtered = hits.filter((h: any) => {
+        const charTags = (h.tags || []).map((t: any) => (t.name || "").replace(/^[^\w]*\s*/, "").toLowerCase());
+        return !lowerExclude.some((et: string) => charTags.includes(et));
+      });
+    }
+
+    // NSFW filter — only hide NSFW when explicitly off
+    if (!p.nsfw) {
+      filtered = filtered.filter((h: any) => !h.is_nsfw);
+    }
+
+    return {
+      cards: filtered.map((h: any) => {
+        const tags = (h.tags || []).map((t: any) => t.name?.replace(/^[^\w]*\s*/, "") || t.slug || "");
+        if (h.custom_tags?.length) {
+          tags.push(...h.custom_tags.map((t: string) => `#${t}`));
+        }
+        const plainDesc = typeof h.description === "string"
+          ? h.description.replace(/<[^>]*>/g, "").trim()
+          : "";
+
+        return {
+          id: h.id || "",
+          name: h.name || "Unnamed",
+          creator: h.creator_name || "",
+          tagline: plainDesc.slice(0, 200),
+          tags,
+          avatarUrl: h.avatar ? `/api/bot-browser/janitor/avatar/${h.avatar}` : "",
+          stat1: h.stats?.message || 0,
+          stat1Label: "Messages",
+          stat1Icon: "message" as const,
+          stat2: h.stats?.chat || 0,
+          stat2Label: "Chats",
+          stat2Icon: "eye" as const,
+          stat3: h.total_tokens || 0,
+          stat3Label: "Tokens",
+          stat3Icon: "hash" as const,
+          nsfw: !!h.is_nsfw,
+          externalUrl: `https://janitorai.com/characters/${h.id}_character-${(h.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
+          _raw: h,
+        };
+      }),
+      totalCount: total,
+    };
+  },
+  fetchDetail: async (card) => {
+    const raw = card._raw as any;
+    const charId = raw?.id || card.id;
+
+    try {
+      const res = await fetch(`/api/bot-browser/janitor/character/${charId}`);
+      if (res.ok) {
+        const d = await res.json();
+        // Check for actual content — empty strings mean hidden
+        const hasDefs = !!((d.personality && d.personality.trim()) ||
+          (d.first_message && d.first_message.trim()) ||
+          (d.scenario && d.scenario.trim()) ||
+          (d.example_dialogs && d.example_dialogs.trim()));
+        if (hasDefs) {
+          const rawDesc = d.description || "";
+          const plainDesc = typeof rawDesc === "string" ? rawDesc.replace(/<[^>]*>/g, "").trim() : "";
+          return {
+            description: (d.personality && d.personality.trim()) || undefined,
+            scenario: (d.scenario && d.scenario.trim()) || undefined,
+            firstMessage: (d.first_message && d.first_message.trim()) || undefined,
+            exampleDialogs: (d.example_dialogs && d.example_dialogs.trim()) || undefined,
+            alternateGreetings: Array.isArray(d.first_messages)
+              ? d.first_messages.map((m: any) => typeof m === "string" ? m : m?.message || "").filter(Boolean)
+              : undefined,
+            creatorNotes: plainDesc || undefined,
+          };
+        }
+      }
+    } catch { /* fall through */ }
+
+    // Definitions are hidden by author or not logged in
+    const rawDesc = raw?.description || "";
+    const plainDesc = typeof rawDesc === "string" ? rawDesc.replace(/<[^>]*>/g, "").trim() : "";
+
+    // Check if we're logged in by hitting the session endpoint
+    let isLoggedIn = false;
+    try {
+      const sessionRes = await fetch("/api/bot-browser/janitor/session");
+      const sessionData = await sessionRes.json();
+      isLoggedIn = !!sessionData?.active;
+    } catch { /* ignore */ }
+
+    return {
+      creatorNotes: plainDesc || undefined,
+      extra: [{
+        title: isLoggedIn ? "🔒 Definitions Hidden by Author" : "⚠️ Login Required for Definitions",
+        content: isLoggedIn
+          ? "This character's definitions are hidden by the author. You can still import with basic info (name, avatar, tags, description). Try searching for the same character on JannyAI — it often has the full definitions available."
+          : "JanitorAI requires login to view character definitions (personality, first message, scenario). Click 'Log in for character definitions' in the toolbar. You can still import with basic info. Alternatively, try JannyAI for the same character.",
+      }],
+    };
+  },
+  importCard: async () => {},
+};
+
+// ════════════════════════════════════════════════
 // Provider Registry
 // ════════════════════════════════════════════════
 
 const ALL_PROVIDERS: ProviderConfig[] = [
   chubProvider,
   jannyProvider,
+  janitorProvider,
   chartavernProvider,
   pygmalionProvider,
   wyvernProvider,
 ];
+
 
 function getProvider(id: string): ProviderConfig {
   return ALL_PROVIDERS.find((p) => p.id === id) ?? chubProvider;
@@ -874,9 +1108,11 @@ export function BotBrowserView() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [pygLoggedIn, setPygLoggedIn] = useState(false);
   const [ctLoggedIn, setCtLoggedIn] = useState(false);
+  const [janitorLoggedIn, setJanitorLoggedIn] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
-
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+
 
   // ── Check auth sessions on mount ──
   useEffect(() => {
@@ -892,7 +1128,14 @@ export function BotBrowserView() {
         if (d?.active) setCtLoggedIn(true);
       })
       .catch(() => {});
+    fetch("/api/bot-browser/janitor/session")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.active) setJanitorLoggedIn(true);
+      })
+      .catch(() => {});
   }, []);
+
 
   // ── Dynamically update nsfwAvailable based on auth ──
   const effectiveNsfwAvailable = useMemo(() => {
@@ -901,9 +1144,11 @@ export function BotBrowserView() {
     if (provider.nsfwMode === "login") {
       if (sourceId === "pygmalion") return pygLoggedIn;
       if (sourceId === "chartavern") return ctLoggedIn;
+      if (sourceId === "janitor") return janitorLoggedIn;
     }
     return provider.nsfwAvailable;
-  }, [provider, sourceId, pygLoggedIn, ctLoggedIn]);
+  }, [provider, sourceId, pygLoggedIn, ctLoggedIn, janitorLoggedIn]);
+
 
   const switchProvider = useCallback((newId: string) => {
     const newProv = getProvider(newId);
@@ -960,6 +1205,7 @@ export function BotBrowserView() {
         features,
         extraToggles,
       });
+
       setResults(result.cards);
       setTotalCount(result.totalCount);
     } catch (err) {
@@ -1128,8 +1374,7 @@ export function BotBrowserView() {
     provider.extraToggles.filter((t) => extraToggles[t.key]).length;
   const hasActiveFeatures = activeFeatureCount > 0;
   const canAddCustomTag = tagSearch.trim().length >= 2 && !includeTags.includes(tagSearch.trim().toLowerCase());
-
-  const perPage = sourceId === "chub" ? 48 : sourceId === "janny" ? 80 : sourceId === "chartavern" ? 60 : 48;
+  const perPage = sourceId === "chub" ? 48 : sourceId === "janny" ? 80 : sourceId === "janitor" ? 34 : sourceId === "chartavern" ? 60 : 48;
   const totalPages = Math.max(1, Math.ceil(totalCount / perPage));
 
   const sortGroups = useMemo(() => {
@@ -1245,6 +1490,37 @@ export function BotBrowserView() {
     toast.info("Logged out of CharacterTavern.");
   };
 
+  const handleJanitorLogin = async (token: string) => {
+    setLoginLoading(true);
+    try {
+      const res = await fetch("/api/bot-browser/janitor/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Login failed");
+
+      setJanitorLoggedIn(true);
+      setShowLoginModal(false);
+      setPage(1);
+      toast.success(`Connected to JanitorAI as ${data.email}! Character definitions unlocked.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Token validation failed");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleJanitorLogout = async () => {
+    await fetch("/api/bot-browser/janitor/logout", { method: "POST" });
+    setJanitorLoggedIn(false);
+    setNsfw(false);
+    setPage(1);
+    toast.info("Logged out of JanitorAI.");
+  };
+
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* ═══ Header ═══ */}
@@ -1298,6 +1574,12 @@ export function BotBrowserView() {
             <CheckCircle size="0.625rem" /> Session active
           </span>
         )}
+        {sourceId === "janitor" && janitorLoggedIn && (
+          <span className="ml-auto flex items-center gap-1 text-[0.65rem] text-emerald-400">
+            <CheckCircle size="0.625rem" /> Logged in
+          </span>
+        )}
+
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -1593,6 +1875,22 @@ export function BotBrowserView() {
                     Use "🔞 Popular NSFW" sort for NSFW content
                   </span>
                 )}
+                {sourceId === "janitor" && (
+                  janitorLoggedIn ? (
+                    <span className="flex items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[0.65rem] text-emerald-400">
+                      <CheckCircle size="0.625rem" /> Logged in — definitions unlocked
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => setShowLoginModal(true)}
+                      className="flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-400 transition-colors hover:bg-amber-500/10"
+                    >
+                      <LogIn size="0.75rem" /> Log in for character definitions
+                    </button>
+                  )
+                )}
+
+
 
                 <button
                   onClick={doSearch}
@@ -1703,11 +2001,22 @@ export function BotBrowserView() {
               ) : error ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 py-12">
                   <span className="text-sm text-[var(--destructive)]">{error}</span>
+                  {sourceId === "janitor" && (
+                    <div className="max-w-md rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-center">
+                      <p className="text-sm font-bold text-amber-400">👆 CLICK RETRY BELOW</p>
+                      <p className="mt-1 text-xs text-amber-400/80">JanitorAI is known to need a couple of retries — it'll work smoothly after!</p>
+                    </div>
+                  )}
                   <button
                     onClick={doSearch}
-                    className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)]/15 px-4 py-2 text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/25"
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-lg px-4 py-2 font-medium transition-colors",
+                      sourceId === "janitor"
+                        ? "bg-amber-500/20 px-6 py-3 text-sm text-amber-400 hover:bg-amber-500/30"
+                        : "bg-[var(--primary)]/15 text-xs text-[var(--primary)] hover:bg-[var(--primary)]/25",
+                    )}
                   >
-                    <RefreshCw size="0.75rem" /> Refresh
+                    <RefreshCw size={sourceId === "janitor" ? "1rem" : "0.75rem"} /> Retry
                   </button>
                 </div>
               ) : results.length === 0 ? (
@@ -1757,14 +2066,18 @@ export function BotBrowserView() {
           provider={provider}
           pygLoggedIn={pygLoggedIn}
           ctLoggedIn={ctLoggedIn}
+          janitorLoggedIn={janitorLoggedIn}
           loginLoading={loginLoading}
           onClose={() => setShowLoginModal(false)}
           onPygLogin={handlePygmalionLogin}
           onPygLogout={handlePygmalionLogout}
           onCtSetCookie={handleCtSetCookie}
           onCtLogout={handleCtLogout}
+          onJanitorLogin={handleJanitorLogin}
+          onJanitorLogout={handleJanitorLogout}
         />
       )}
+
     </div>
   );
 }
@@ -1778,23 +2091,29 @@ function LoginModal({
   provider,
   pygLoggedIn,
   ctLoggedIn,
+  janitorLoggedIn,
   loginLoading,
   onClose,
   onPygLogin,
   onPygLogout,
   onCtSetCookie,
   onCtLogout,
+  onJanitorLogin,
+  onJanitorLogout,
 }: {
   sourceId: string;
   provider: ProviderConfig;
   pygLoggedIn: boolean;
   ctLoggedIn: boolean;
+  janitorLoggedIn: boolean;
   loginLoading: boolean;
   onClose: () => void;
   onPygLogin: (u: string, p: string) => void;
   onPygLogout: () => void;
   onCtSetCookie: (c: string) => void;
   onCtLogout: () => void;
+  onJanitorLogin: (token: string) => void;
+  onJanitorLogout: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1803,7 +2122,9 @@ function LoginModal({
 
   const isPyg = sourceId === "pygmalion";
   const isCt = sourceId === "chartavern";
-  const isLoggedIn = isPyg ? pygLoggedIn : ctLoggedIn;
+  const isJanitor = sourceId === "janitor";
+  const isLoggedIn = isPyg ? pygLoggedIn : isCt ? ctLoggedIn : janitorLoggedIn;
+
 
   return (
     <div
@@ -1823,6 +2144,10 @@ function LoginModal({
             {isPyg ? (
               <>
                 <KeyRound size="1rem" className="text-amber-400" /> Pygmalion Authentication
+              </>
+            ) : isJanitor ? (
+              <>
+                <KeyRound size="1rem" className="text-amber-400" /> JanitorAI Login
               </>
             ) : (
               <>
@@ -1845,11 +2170,13 @@ function LoginModal({
             <strong>Browsing and downloading public characters works without logging in!</strong>
           </div>
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-[var(--foreground)]">
-            <span className="mr-1.5">{isPyg ? "🔑" : "🍪"}</span>
-            <strong>Optional:</strong>{" "}
+            <span className="mr-1.5">{isPyg ? "🔑" : isJanitor ? "🧹" : "🍪"}</span>
+            <strong>{isJanitor ? "Recommended:" : "Optional:"}</strong>{" "}
             {isPyg
               ? "Log in to enable NSFW content, follow authors, and access your Following timeline."
-              : "Paste your session cookies to see NSFW-tagged content."}
+              : isJanitor
+                ? "Log in to view character definitions (personality, first message, scenario). NSFW browsing works without login."
+                : "Paste your session cookies to see NSFW-tagged content."}
           </div>
 
           {/* Login form */}
@@ -1985,6 +2312,65 @@ function LoginModal({
                   className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
                 >
                   <ExternalLink size="0.75rem" /> CharacterTavern
+                </a>
+              </div>
+            </div>
+          ) : isJanitor ? (
+            <div className="flex flex-col gap-3">
+              <div>
+                <label className="mb-1 block text-xs text-[var(--muted-foreground)]">Auth Token</label>
+                <textarea
+                  value={cookie}
+                  onChange={(e) => setCookie(e.target.value)}
+                  disabled={isLoggedIn || loginLoading}
+                  placeholder="Paste your sb-auth-auth-token cookie value here"
+                  rows={3}
+                  className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 text-sm font-mono outline-none transition-colors focus:border-[var(--primary)] disabled:opacity-50"
+                />
+              </div>
+              <details open={showHelp} onToggle={(e) => setShowHelp((e.target as HTMLDetailsElement).open)}>
+                <summary className="cursor-pointer text-xs font-medium text-blue-400 hover:underline">
+                  ▸ ❓ How to get your auth token
+                </summary>
+                <div className="mt-2 flex flex-col gap-1.5 rounded-lg bg-[var(--secondary)] p-3 text-[0.7rem] leading-relaxed text-[var(--muted-foreground)]">
+                  <p>1. Go to <a href="https://janitorai.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">janitorai.com</a> and log in</p>
+                  <p>2. Open DevTools (F12) → <strong>Application</strong> tab → <strong>Cookies</strong></p>
+                  <p>3. Click on <code className="rounded bg-[var(--accent)] px-1">https://janitorai.com</code></p>
+                  <p>4. Find the cookie named <code className="rounded bg-[var(--accent)] px-1">sb-auth-auth-token</code></p>
+                  <p>5. Double-click the <strong>Value</strong> column, copy it (starts with <code className="rounded bg-[var(--accent)] px-1">base64-</code>)</p>
+                  <p>6. Paste it above</p>
+                  <p className="mt-1 text-amber-400">⚠️ Token expires after ~30 min. You'll need to copy a fresh one if it expires.</p>
+                </div>
+              </details>
+              {isLoggedIn && (
+                <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                  <CheckCircle size="0.75rem" /> Connected — character definitions unlocked
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                {!isLoggedIn ? (
+                  <button
+                    onClick={() => onJanitorLogin(cookie)}
+                    disabled={loginLoading || !cookie.trim()}
+                    className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {loginLoading ? <Loader2 size="0.75rem" className="animate-spin" /> : <KeyRound size="0.75rem" />} Connect
+                  </button>
+                ) : (
+                  <button
+                    onClick={onJanitorLogout}
+                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                  >
+                    <LogOut size="0.75rem" /> Disconnect
+                  </button>
+                )}
+                <a
+                  href="https://janitorai.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                >
+                  <ExternalLink size="0.75rem" /> JanitorAI
                 </a>
               </div>
             </div>
