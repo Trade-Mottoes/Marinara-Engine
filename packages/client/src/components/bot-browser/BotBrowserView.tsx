@@ -1170,25 +1170,37 @@ export function BotBrowserView() {
 
 
 
-  // ── Check auth sessions on mount — keep persisted login state, server sessions are ephemeral ──
+  // ── Check auth sessions on mount — sync persisted state with server ──
   useEffect(() => {
-    // We intentionally do NOT clear persisted login state when server says inactive.
-    // Server sessions (Pygmalion, JanitorAI) are in-memory and lost on restart.
-    // The persisted state just remembers "user has logged in before" so the UI
-    // stays consistent. The actual token will be re-validated on use.
     fetch("/api/bot-browser/pygmalion/session")
       .then((r) => r.json())
-      .then((d) => { if (d?.active) setPygLoggedIn(true); })
+      .then((d) => {
+        if (!d?.active && pygLoggedIn) {
+          setPygLoggedIn(false);
+          toast.info("Pygmalion session expired — please log in again.");
+        } else if (d?.active) setPygLoggedIn(true);
+      })
       .catch(() => {});
     fetch("/api/bot-browser/chartavern/session")
       .then((r) => r.json())
-      .then((d) => { if (d?.active) setCtLoggedIn(true); })
+      .then((d) => {
+        if (!d?.active && ctLoggedIn) {
+          setCtLoggedIn(false);
+          toast.info("CharacterTavern session expired — please log in again.");
+        } else if (d?.active) setCtLoggedIn(true);
+      })
       .catch(() => {});
     fetch("/api/bot-browser/janitor/session")
       .then((r) => r.json())
-      .then((d) => { if (d?.active) setJanitorLoggedIn(true); })
+      .then((d) => {
+        if (!d?.active && janitorLoggedIn) {
+          setJanitorLoggedIn(false);
+          toast.info("JanitorAI session expired — please log in again.");
+        } else if (d?.active) setJanitorLoggedIn(true);
+      })
       .catch(() => {});
-  }, [setPygLoggedIn, setCtLoggedIn, setJanitorLoggedIn]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 
   // ── Dynamically update nsfwAvailable based on auth ──
@@ -2557,6 +2569,46 @@ function DetailView({
   onImport: (card: BrowseCard) => void;
 }) {
   const [imgError, setImgError] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [showExtractWarning, setShowExtractWarning] = useState(false);
+  const [extractedDetail, setExtractedDetail] = useState<CardDetail | null>(null);
+
+  // Detect if this is a JanitorAI character with hidden definitions
+  const isJanitor = provider.id === "janitor";
+  const hasDefinitions = !!(detail?.description || detail?.personality || detail?.firstMessage || detail?.scenario);
+  const isHidden = isJanitor && !hasDefinitions && !extractedDetail;
+  const displayDetail = extractedDetail || detail;
+
+  const handleExtract = async () => {
+    setShowExtractWarning(false);
+    setExtracting(true);
+    try {
+      const raw = card._raw as any;
+      const charId = raw?.id || card.id;
+      const res = await fetch(`/api/bot-browser/janitor/extract-definitions/${charId}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(err.error || `Failed (${res.status})`);
+      }
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "Extraction failed");
+
+      const extracted: CardDetail = {
+        description: data.personality || undefined,
+        scenario: data.scenario || undefined,
+        firstMessage: data.firstMessage || undefined,
+        exampleDialogs: data.exampleDialogs || undefined,
+        alternateGreetings: data.alternateGreetings?.length > 0 ? data.alternateGreetings : undefined,
+        creatorNotes: detail?.creatorNotes || undefined,
+      };
+      setExtractedDetail(extracted);
+      toast.success("Hidden definitions extracted successfully!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Extraction failed");
+    } finally {
+      setExtracting(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -2656,20 +2708,52 @@ function DetailView({
                 ))}
               </div>
             )}
-            {detail ? (
+
+            {/* Extract Hidden Definitions button for JanitorAI */}
+            {isHidden && (
+              <div className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
+                  🔒 Definitions Hidden by Author
+                </div>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  This character's personality, scenario, and first message are hidden. You can extract them by triggering one AI generation on your JanitorAI account.
+                </p>
+                {extracting ? (
+                  <div className="flex items-center gap-2 text-xs text-amber-400">
+                    <Loader2 size="0.875rem" className="animate-spin" /> Extracting definitions... this may take a moment
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowExtractWarning(true)}
+                    className="flex w-fit items-center gap-2 rounded-lg bg-amber-500/20 px-4 py-2.5 text-sm font-medium text-amber-400 transition-all hover:bg-amber-500/30 active:scale-95"
+                  >
+                    🔓 Extract Hidden Definitions
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Extracted success indicator */}
+            {extractedDetail && (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-2 text-xs text-emerald-400">
+                <CheckCircle size="0.875rem" /> Hidden definitions extracted successfully!
+              </div>
+            )}
+
+            {displayDetail ? (
               <div className="flex flex-col gap-3">
-                {detail.creatorNotes && <DefSection title="Creator's Notes" content={detail.creatorNotes} />}
-                {detail.description && <DefSection title="Description" content={detail.description} />}
-                {detail.personality && <DefSection title="Personality" content={detail.personality} />}
-                {detail.scenario && <DefSection title="Scenario" content={detail.scenario} />}
-                {detail.firstMessage && <DefSection title="First Message" content={detail.firstMessage} />}
-                {detail.alternateGreetings && detail.alternateGreetings.length > 0 && (
+                {displayDetail.creatorNotes && <DefSection title="Creator's Notes" content={displayDetail.creatorNotes} />}
+                {displayDetail.description && <DefSection title="Description / Personality" content={displayDetail.description} />}
+                {displayDetail.personality && <DefSection title="Personality" content={displayDetail.personality} />}
+                {displayDetail.scenario && <DefSection title="Scenario" content={displayDetail.scenario} />}
+                {displayDetail.firstMessage && <DefSection title="First Message" content={displayDetail.firstMessage} />}
+                {displayDetail.alternateGreetings && displayDetail.alternateGreetings.length > 0 && (
                   <div>
                     <h4 className="mb-1 text-xs font-semibold text-[var(--foreground)]">
-                      Alternate Greetings ({detail.alternateGreetings.length})
+                      Alternate Greetings ({displayDetail.alternateGreetings.length})
                     </h4>
                     <div className="flex flex-col gap-1.5">
-                      {detail.alternateGreetings.map((g, i) => (
+                      {displayDetail.alternateGreetings.map((g, i) => (
                         <div
                           key={i}
                           className="max-h-24 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)] p-2.5 text-xs text-[var(--muted-foreground)]"
@@ -2680,13 +2764,13 @@ function DetailView({
                     </div>
                   </div>
                 )}
-                {detail.exampleDialogs && <DefSection title="Example Dialogues" content={detail.exampleDialogs} />}
-                {detail.hasLorebook && (
+                {displayDetail.exampleDialogs && <DefSection title="Example Dialogues" content={displayDetail.exampleDialogs} />}
+                {displayDetail.hasLorebook && (
                   <div className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
                     <CheckCircle size="0.75rem" /> Has embedded lorebook
                   </div>
                 )}
-                {detail.extra?.map((section, i) => (
+                {displayDetail.extra?.map((section, i) => (
                   <DefSection key={i} title={section.title} content={section.content} />
                 ))}
               </div>
@@ -2697,6 +2781,63 @@ function DetailView({
                   : "No detailed definition available. You can still import this character with basic info."}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Extract Warning Modal */}
+      {showExtractWarning && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowExtractWarning(false); }}
+        >
+          <div className="absolute inset-0 bg-black/60" onClick={() => setShowExtractWarning(false)} />
+          <div
+            className="relative w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
+              <h3 className="flex items-center gap-2 text-sm font-bold text-amber-400">
+                ⚠️ Warning: API Generation Required
+              </h3>
+              <button
+                onClick={() => setShowExtractWarning(false)}
+                className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]"
+              >
+                <X size="1rem" />
+              </button>
+            </div>
+            <div className="flex flex-col gap-4 p-5">
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+                <p className="font-bold text-red-400">⚠️ THIS WILL USE ONE AI GENERATION ON YOUR JANITORAI ACCOUNT!</p>
+                <p className="mt-2">
+                  Make sure your JanitorAI API is set to something that <strong>doesn't cost tokens</strong> (e.g. a free or dummy API key), or <strong>you WILL spend generation tokens.</strong>
+                </p>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-3 text-xs text-[var(--muted-foreground)]">
+                <p><strong>How it works:</strong></p>
+                <ul className="mt-1 list-disc pl-4 space-y-1">
+                  <li>Creates a temporary chat with this character on your JanitorAI account</li>
+                  <li>Sends one message to trigger AI generation — this is what reveals the hidden definitions</li>
+                  <li>Extracts the personality, scenario, and example dialogs from the server's response</li>
+                  <li>Deletes the temporary chat automatically</li>
+                </ul>
+              </div>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setShowExtractWarning(false)}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--secondary)] px-4 py-2 text-xs font-medium transition-colors hover:bg-[var(--accent)]"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleExtract}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-amber-500"
+                >
+                  I understand, extract definitions
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

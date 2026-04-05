@@ -1,3 +1,4 @@
+
 // ──────────────────────────────────────────────
 // Routes: Browser (proxy to character sources)
 // ──────────────────────────────────────────────
@@ -426,6 +427,260 @@ export async function botBrowserRoutes(app: FastifyInstance) {
       }
     }
   });
+  // ── Extract hidden definitions from JanitorAI character ──
+  app.post<{ Params: { id: string } }>("/janitor/extract-definitions/:id", async (req, reply) => {
+    const charId = req.params.id;
+    if (!charId) return reply.status(400).send({ error: "Missing character ID" });
+
+    const token = await getJanitorToken();
+    if (!token) return reply.status(401).send({ error: "Not logged into JanitorAI" });
+
+    const headers: Record<string, string> = {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+      "x-app-version": JANITOR_APP_VERSION,
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "Origin": "https://janitorai.com",
+      "Referer": "https://janitorai.com/",
+    };
+
+    try {
+      // Step 1: Get user profile info
+      const profileRes = await fetch(`${JANITOR_API}/users/me/profile`, {
+        headers,
+      });
+      let profileData: any = { id: "unknown", name: "User" };
+      if (profileRes.ok) {
+        const pd = await profileRes.json() as any;
+        profileData = {
+          id: pd.id || "unknown",
+          name: pd.name || "User",
+          user_appearance: pd.appearance || "",
+          user_name: pd.user_name || pd.name || "User",
+        };
+      }
+
+      // Step 2: Get user config
+      const configRes = await fetch(`${JANITOR_API}/users/me/config`, {
+        headers,
+      });
+      let userConfig: any = {
+        api: "openai",
+        open_ai_mode: "proxy",
+        open_ai_reverse_proxy: "",
+        openAiModel: "gpt-4o-mini",
+        generation_settings: { context_length: 4096, max_new_token: 100, temperature: 1, top_k: 0, top_p: 0, frequency_penalty: 0, repetition_penalty: 0 },
+      };
+      if (configRes.ok) {
+        userConfig = await configRes.json() as any;
+      }
+
+      // Step 3: Create a temporary chat
+      const chatRes = await fetch(`${JANITOR_API}/chats`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ character_id: charId }),
+      });
+      if (!chatRes.ok) {
+        const errText = await chatRes.text().catch(() => "");
+        return reply.status(chatRes.status).send({ error: `Failed to create chat: ${errText.slice(0, 300)}` });
+      }
+      const chatData = await chatRes.json() as any;
+      const chatId = chatData.id;
+
+      // Step 4: Get chat details (includes first message)
+      const chatDetailRes = await fetch(`${JANITOR_API}/chats/${chatId}`, {
+        headers,
+      });
+      if (!chatDetailRes.ok) {
+        return reply.status(500).send({ error: "Failed to get chat details" });
+      }
+      const chatDetail = await chatDetailRes.json() as any;
+
+      // Step 5: Post a user message
+      const msgRes = await fetch(`${JANITOR_API}/chats/${chatId}/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ message: ".", is_bot: false, is_main: true }),
+      });
+      if (!msgRes.ok) {
+        const errText = await msgRes.text().catch(() => "");
+        return reply.status(500).send({ error: `Failed to send message: ${errText.slice(0, 300)}` });
+      }
+
+      // Build chatMessages array from chat detail + our new message
+      const botMessage = chatDetail.chatMessages?.[0] || {
+        character_id: charId,
+        chat_id: chatId,
+        created_at: new Date().toISOString(),
+        id: Date.now(),
+        is_bot: true,
+        is_main: true,
+        message: chatDetail.character?.first_message || "Hello",
+      };
+      const userMessage = {
+        chat_id: chatId,
+        created_at: new Date().toISOString(),
+        id: Date.now() + 1,
+        is_bot: false,
+        is_main: true,
+        message: ".",
+      };
+
+      // Step 6: Call generateAlpha to get the assembled system prompt
+      const generatePayload = {
+        chat: {
+          character_id: charId,
+          id: chatId,
+          summary: "",
+          user_id: profileData.id,
+        },
+        chatMessages: [botMessage, userMessage],
+        clientPlatform: "web",
+        forcedPromptGenerationCacheRefetch: { character: false, chat: false, profile: false, script: false },
+        generateMode: "NEW",
+        generateType: "CHAT",
+        profile: profileData,
+        profiles: [{
+          appearance: profileData.user_appearance || "",
+          id: profileData.id,
+          name: profileData.name,
+          type: "profile",
+          user_name: profileData.user_name || profileData.name,
+        }],
+        userConfig,
+      };
+
+      const genRes = await fetch("https://janitorai.com/generateAlpha", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Accept": "text/event-stream",
+        },
+        body: JSON.stringify(generatePayload),
+      });
+
+      if (!genRes.ok) {
+        const errText = await genRes.text().catch(() => "");
+        return reply.status(500).send({ error: `generateAlpha failed (${genRes.status}): ${errText.slice(0, 500)}` });
+      }
+
+      // The response is the assembled messages payload (may be SSE stream)
+      // Read the full response text
+      const responseText = await genRes.text();
+
+      // Try to parse as JSON first (non-streamed response contains the messages array)
+      let systemPrompt = "";
+      try {
+        const jsonResponse = JSON.parse(responseText);
+        if (jsonResponse.messages && Array.isArray(jsonResponse.messages)) {
+          const sysMsg = jsonResponse.messages.find((m: any) => m.role === "system");
+          if (sysMsg) {
+            systemPrompt = sysMsg.content;
+          }
+        }
+      } catch {
+        // If it's SSE, the first chunk often contains the full messages payload
+        // Look for JSON in the stream
+        const lines = responseText.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const chunk = JSON.parse(line.slice(6));
+              if (chunk.messages) {
+                const sysMsg = chunk.messages.find((m: any) => m.role === "system");
+                if (sysMsg) {
+                  systemPrompt = sysMsg.content;
+                  break;
+                }
+              }
+            } catch { /* skip non-JSON lines */ }
+          }
+          // Also check for raw JSON lines
+          if (line.startsWith("{")) {
+            try {
+              const chunk = JSON.parse(line);
+              if (chunk.messages) {
+                const sysMsg = chunk.messages.find((m: any) => m.role === "system");
+                if (sysMsg) {
+                  systemPrompt = sysMsg.content;
+                  break;
+                }
+              }
+            } catch { /* skip */ }
+          }
+        }
+      }
+
+      // Step 7: Try to delete the temporary chat (best effort cleanup)
+      try {
+        await fetch(`${JANITOR_API}/chats/${chatId}`, {
+          method: "DELETE",
+          headers,
+        });
+      } catch { /* ignore cleanup errors */ }
+
+      if (!systemPrompt) {
+        return reply.status(500).send({ error: "Could not extract system prompt from response", rawPreview: responseText.slice(0, 1000) });
+      }
+
+      // Step 8: Parse the system prompt to extract character fields
+      const extractTag = (text: string, tag: string): string => {
+        // Try <Tag>...</Tag> pattern
+        const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
+        const match = text.match(regex);
+        return match && match[1] ? match[1].trim() : "";
+      };
+
+      // Extract character name from the persona tag
+      const charName = chatDetail.character?.name || "Unknown";
+      // JanitorAI uses <CharName's Persona> tag — try multiple patterns
+      const chatName = chatDetail.character?.chat_name || charName.split(" ")[0];
+      
+      let personality = extractTag(systemPrompt, `${charName}'s Persona`)
+        || extractTag(systemPrompt, `${chatName}'s Persona`)
+        || extractTag(systemPrompt, `${charName}`)
+        || extractTag(systemPrompt, `${chatName}`)
+        || extractTag(systemPrompt, "char");
+      
+      // If personality still empty, try to grab everything between first persona-like tag and <Scenario>
+      if (!personality) {
+        const personaMatch = systemPrompt.match(/<[^>]*Persona[^>]*>([\s\S]*?)<\/[^>]*Persona[^>]*>/i);
+        if (personaMatch && personaMatch[1]) personality = personaMatch[1].trim();
+      }
+
+      const scenario = extractTag(systemPrompt, "Scenario");
+      const exampleDialogs = extractTag(systemPrompt, "example_dialogs") || extractTag(systemPrompt, "example dialogs");
+      
+      // UserPersona tag — JanitorAI replaces {{user}} with actual name, so try both
+      let userPersona = extractTag(systemPrompt, "UserPersona");
+      if (!userPersona) {
+        const upMatch = systemPrompt.match(/<UserPersona>([\s\S]*?)<\/UserPersona>/i);
+        if (upMatch && upMatch[1]) userPersona = upMatch[1].trim();
+      }
+
+      // Also get first message and alternate greetings from chat detail
+      const firstMessage = chatDetail.character?.first_message || "";
+      const firstMessages = (chatDetail.character?.first_messages || []).filter((m: any) => m !== null);
+
+      return {
+        ok: true,
+        characterName: charName,
+        personality,
+        scenario,
+        exampleDialogs,
+        userPersona,
+        firstMessage,
+        alternateGreetings: firstMessages,
+        rawSystemPrompt: systemPrompt,
+      };
+
+    } catch (err) {
+      return reply.status(500).send({ error: `Extraction failed: ${(err as Error).message}` });
+    }
+  });
+
 
   // ── Proxy JanitorAI avatar images ──
   app.get<{ Params: { "*": string } }>("/janitor/avatar/*", async (req, reply) => {
