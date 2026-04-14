@@ -13,6 +13,7 @@ import { eq, inArray } from "drizzle-orm";
 import { existsSync } from "fs";
 import { join } from "path";
 import { DATA_DIR } from "../utils/data-dir.js";
+import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
 
 export async function chatsRoutes(app: FastifyInstance) {
   const storage = createChatsStorage(app.db);
@@ -37,7 +38,14 @@ export async function chatsRoutes(app: FastifyInstance) {
   // Create chat
   app.post("/", async (req) => {
     const input = createChatSchema.parse(req.body);
-    return storage.create(input);
+    const body = req.body as Record<string, unknown>;
+    return storage.create(
+      input,
+      normalizeTimestampOverrides({
+        createdAt: body.createdAt,
+        updatedAt: body.updatedAt,
+      }),
+    );
   });
 
   // Update chat
@@ -150,7 +158,14 @@ export async function chatsRoutes(app: FastifyInstance) {
   // Create message
   app.post<{ Params: { id: string } }>("/:id/messages", async (req) => {
     const input = createMessageSchema.parse({ ...(req.body as Record<string, unknown>), chatId: req.params.id });
-    return storage.createMessage(input);
+    const body = req.body as Record<string, unknown>;
+    return storage.createMessage(
+      input,
+      normalizeTimestampOverrides({
+        createdAt: body.createdAt,
+        updatedAt: body.updatedAt,
+      }),
+    );
   });
 
   // Delete message

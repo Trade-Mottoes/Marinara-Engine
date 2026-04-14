@@ -16,6 +16,16 @@ import type {
   UpdateChoiceBlockInput,
 } from "@marinara-engine/shared";
 import { DEFAULT_GENERATION_PARAMS } from "@marinara-engine/shared";
+import { normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
+
+function resolveTimestamps(overrides?: TimestampOverrides | null) {
+  const normalized = normalizeTimestampOverrides(overrides);
+  const createdAt = normalized?.createdAt ?? now();
+  return {
+    createdAt,
+    updatedAt: normalized?.updatedAt ?? createdAt,
+  };
+}
 
 export function createPromptsStorage(db: DB) {
   return {
@@ -37,9 +47,9 @@ export function createPromptsStorage(db: DB) {
       return rows[0] ?? null;
     },
 
-    async create(input: CreatePromptPresetInput) {
+    async create(input: CreatePromptPresetInput, timestampOverrides?: TimestampOverrides | null) {
       const id = newId();
-      const timestamp = now();
+      const timestamp = resolveTimestamps(timestampOverrides);
       await db.insert(promptPresets).values({
         id,
         name: input.name,
@@ -52,8 +62,8 @@ export function createPromptsStorage(db: DB) {
         wrapFormat: input.wrapFormat ?? "xml",
         isDefault: String(input.isDefault ?? false),
         author: input.author ?? "",
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: timestamp.createdAt,
+        updatedAt: timestamp.updatedAt,
       });
       return this.getById(id);
     },

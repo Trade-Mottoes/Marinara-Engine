@@ -2,7 +2,7 @@
 // Importer: SillyTavern Bulk Import (folder scan)
 // ──────────────────────────────────────────────
 import { readdir, readFile, stat, copyFile, mkdir } from "fs/promises";
-import { join, extname, basename } from "path";
+import { join, extname, basename, relative } from "path";
 import { existsSync, readdirSync } from "fs";
 import { randomUUID } from "crypto";
 import type { DB } from "../../db/connection.js";
@@ -13,6 +13,7 @@ import { importSTLorebook } from "./st-lorebook.importer.js";
 import { characters as charactersTable, personas as personasTable } from "../../db/schema/index.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { DATA_DIR } from "../../utils/data-dir.js";
+import { getFileTimestampOverrides, parseTrustedTimestamp } from "./import-timestamps.js";
 
 const BG_DIR = join(DATA_DIR, "backgrounds");
 const BG_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"]);
@@ -133,19 +134,42 @@ async function listFilesRecursive(dir: string, ext?: string): Promise<string[]> 
   return results;
 }
 
+function makeScanItemId(category: string, dataDir: string, filePath: string) {
+  return `${category}:${relative(dataDir, filePath).replace(/\\/g, "/")}`;
+}
+
+function isConfidentBuiltinPreset(filePath: string) {
+  const name = basename(filePath, extname(filePath)).trim().toLowerCase();
+  return new Set([
+    "default",
+    "deterministic",
+    "neutral",
+    "universal-creative",
+    "universal-light",
+    "universal-super-creative",
+  ]).has(name);
+}
+
 // ─── Scan ───
+
+interface STBulkScanItemBase {
+  id: string;
+  path: string;
+  name: string;
+  modifiedAt: string | null;
+}
 
 export interface STBulkScanResult {
   success: boolean;
   error?: string;
   dataDir?: string;
-  characters: { path: string; name: string; format: string }[];
-  chats: { path: string; characterName: string; folderName: string }[];
-  groupChats: { path: string; groupName: string; members: string[] }[];
-  presets: { path: string; name: string }[];
-  lorebooks: { path: string; name: string }[];
-  backgrounds: { path: string; name: string }[];
-  personas: { path: string; name: string; description: string }[];
+  characters: Array<STBulkScanItemBase & { format: string }>;
+  chats: Array<STBulkScanItemBase & { characterName: string; folderName: string }>;
+  groupChats: Array<STBulkScanItemBase & { groupName: string; members: string[] }>;
+  presets: Array<STBulkScanItemBase & { isBuiltin?: boolean }>;
+  lorebooks: STBulkScanItemBase[];
+  backgrounds: STBulkScanItemBase[];
+  personas: Array<STBulkScanItemBase & { description: string }>;
 }
 
 export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> {
@@ -201,7 +225,14 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
         try {
           const raw = JSON.parse(await readFile(fullPath, "utf-8"));
           const name = raw?.data?.name ?? raw?.char_name ?? raw?.name ?? basename(e.name, ".json");
-          characters.push({ path: fullPath, name: String(name), format: "json" });
+          const fileInfo = await stat(fullPath);
+          characters.push({
+            id: makeScanItemId("characters", dataDir, fullPath),
+            path: fullPath,
+            name: String(name),
+            format: "json",
+            modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+          });
         } catch {
           // skip
         }
@@ -212,7 +243,14 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
           if (card) {
             const d = card.data as Record<string, unknown> | undefined;
             const name = d?.name ?? card.char_name ?? card.name ?? basename(e.name, ".png");
-            characters.push({ path: fullPath, name: String(name), format: "png" });
+            const fileInfo = await stat(fullPath);
+            characters.push({
+              id: makeScanItemId("characters", dataDir, fullPath),
+              path: fullPath,
+              name: String(name),
+              format: "png",
+              modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+            });
           }
         } catch {
           // skip
@@ -233,7 +271,15 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
           const header = JSON.parse(firstLine);
           const folderName = basename(join(f, ".."));
           const charName = header.character_name ?? folderName;
-          chats.push({ path: f, characterName: String(charName), folderName });
+          const fileInfo = await stat(f);
+          chats.push({
+            id: makeScanItemId("chats", dataDir, f),
+            path: f,
+            name: String(charName),
+            characterName: String(charName),
+            folderName,
+            modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+          });
         }
       } catch {
         // skip
@@ -249,7 +295,14 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
       try {
         const raw = JSON.parse(await readFile(f, "utf-8"));
         const name = raw.name ?? basename(f, ".json");
-        presets.push({ path: f, name: String(name) });
+        const fileInfo = await stat(f);
+        presets.push({
+          id: makeScanItemId("presets", dataDir, f),
+          path: f,
+          name: String(name),
+          modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+          ...(isConfidentBuiltinPreset(f) ? { isBuiltin: true } : {}),
+        });
       } catch {
         // skip
       }
@@ -264,7 +317,13 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
       try {
         const raw = JSON.parse(await readFile(f, "utf-8"));
         const name = raw.name ?? basename(f, ".json");
-        lorebooks.push({ path: f, name: String(name) });
+        const fileInfo = await stat(f);
+        lorebooks.push({
+          id: makeScanItemId("lorebooks", dataDir, f),
+          path: f,
+          name: String(name),
+          modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+        });
       } catch {
         // skip
       }
@@ -280,7 +339,14 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
       if (!e.isFile()) continue;
       const ext = extname(e.name).toLowerCase();
       if (BG_EXTS.has(ext)) {
-        backgrounds.push({ path: join(bgDir, e.name), name: e.name });
+        const fullPath = join(bgDir, e.name);
+        const fileInfo = await stat(fullPath);
+        backgrounds.push({
+          id: makeScanItemId("backgrounds", dataDir, fullPath),
+          path: fullPath,
+          name: e.name,
+          modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+        });
       }
     }
     break; // only use the first matching folder
@@ -321,7 +387,15 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
         const gcFolder = join(groupChatsDir, groupId);
         const jsonlFiles = await listFiles(gcFolder, ".jsonl");
         for (const f of jsonlFiles) {
-          groupChats.push({ path: f, groupName: meta.name, members: meta.members });
+          const fileInfo = await stat(f);
+          groupChats.push({
+            id: makeScanItemId("groupChats", dataDir, f),
+            path: f,
+            name: meta.name,
+            groupName: meta.name,
+            members: meta.members,
+            modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+          });
         }
       }
     }
@@ -339,7 +413,15 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
             const meta = chatId ? groupMetaMap.get(String(chatId)) : null;
             const gName = meta?.name ?? "Group Chat";
             const members = meta?.members ?? [];
-            groupChats.push({ path: f, groupName: gName, members });
+            const fileInfo = await stat(f);
+            groupChats.push({
+              id: makeScanItemId("groupChats", dataDir, f),
+              path: f,
+              name: gName,
+              groupName: gName,
+              members,
+              modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+            });
           }
         } catch {
           // skip
@@ -379,7 +461,15 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
         // Get description from settings
         const descEntry = stPersonaDescs[e.name];
         const description = typeof descEntry === "string" ? descEntry : (descEntry?.description ?? "");
-        personas.push({ path: join(avatarDir, e.name), name: displayName, description });
+        const fullPath = join(avatarDir, e.name);
+        const fileInfo = await stat(fullPath);
+        personas.push({
+          id: makeScanItemId("personas", dataDir, fullPath),
+          path: fullPath,
+          name: displayName,
+          description,
+          modifiedAt: parseTrustedTimestamp(fileInfo.mtime),
+        });
       }
     }
     break;
@@ -390,14 +480,16 @@ export async function scanSTFolder(rootPath: string): Promise<STBulkScanResult> 
 
 // ─── Bulk Import ───
 
+export type STBulkImportSelection = boolean | string[];
+
 export interface STBulkImportOptions {
-  characters: boolean;
-  chats: boolean;
-  groupChats: boolean;
-  presets: boolean;
-  lorebooks: boolean;
-  backgrounds: boolean;
-  personas: boolean;
+  characters: STBulkImportSelection;
+  chats: STBulkImportSelection;
+  groupChats: STBulkImportSelection;
+  presets: STBulkImportSelection;
+  lorebooks: STBulkImportSelection;
+  backgrounds: STBulkImportSelection;
+  personas: STBulkImportSelection;
 }
 
 export interface STBulkImportResult {
@@ -429,6 +521,13 @@ export interface ImportProgress {
   imported: STBulkImportResult["imported"];
 }
 
+function resolveSelectedItems<T extends { id: string }>(items: T[], selection: STBulkImportSelection | undefined) {
+  if (selection === true) return items;
+  if (selection === false || !Array.isArray(selection) || selection.length === 0) return [];
+  const selectedIds = new Set(selection);
+  return items.filter((item) => selectedIds.has(item.id));
+}
+
 export async function runSTBulkImport(
   rootPath: string,
   options: STBulkImportOptions,
@@ -447,15 +546,24 @@ export async function runSTBulkImport(
 
   const imported = { characters: 0, chats: 0, groupChats: 0, presets: 0, lorebooks: 0, backgrounds: 0, personas: 0 };
   const errors: string[] = [];
+  const selectedCharacters = resolveSelectedItems(scanResult.characters, options.characters);
+  const selectedChats = resolveSelectedItems(scanResult.chats, options.chats);
+  const selectedGroupChats = resolveSelectedItems(scanResult.groupChats, options.groupChats);
+  const selectedPresets = resolveSelectedItems(scanResult.presets, options.presets);
+  const selectedLorebooks = resolveSelectedItems(scanResult.lorebooks, options.lorebooks);
+  const selectedBackgrounds = resolveSelectedItems(scanResult.backgrounds, options.backgrounds);
+  const selectedPersonas = resolveSelectedItems(scanResult.personas, options.personas);
 
   // Import characters
-  if (options.characters) {
-    const total = scanResult.characters.length;
+  if (selectedCharacters.length > 0) {
+    const total = selectedCharacters.length;
     let idx = 0;
-    for (const ch of scanResult.characters) {
+    for (const ch of selectedCharacters) {
       idx++;
       onProgress?.({ category: "Characters", item: ch.name, current: idx, total, imported });
       try {
+        const fileInfo = await stat(ch.path);
+        const timestampOverrides = getFileTimestampOverrides(fileInfo);
         if (ch.format === "png") {
           const buf = await readFile(ch.path);
           const card = extractCharaFromPng(buf);
@@ -464,12 +572,12 @@ export async function runSTBulkImport(
             const b64 = buf.toString("base64");
             const dataUrl = `data:image/png;base64,${b64}`;
             (card as Record<string, unknown>)._avatarDataUrl = dataUrl;
-            await importSTCharacter(card as Record<string, unknown>, db);
+            await importSTCharacter(card as Record<string, unknown>, db, { timestampOverrides });
             imported.characters++;
           }
         } else {
           const raw = JSON.parse(await readFile(ch.path, "utf-8"));
-          await importSTCharacter(raw, db);
+          await importSTCharacter(raw, db, { timestampOverrides });
           imported.characters++;
         }
       } catch (err) {
@@ -497,7 +605,7 @@ export async function runSTBulkImport(
   }
 
   // Also index by character card filename (ST organises chat folders by filename)
-  for (const ch of scanResult.characters) {
+  for (const ch of selectedCharacters) {
     const filenameKey = basename(ch.path, extname(ch.path)).toLowerCase().trim();
     if (filenameKey && !charNameToId.has(filenameKey)) {
       const charId = charNameToId.get(ch.name.toLowerCase().trim());
@@ -508,15 +616,16 @@ export async function runSTBulkImport(
   // Import chats (with character linking)
   // Generate one groupId per character name so all chats for the same character
   // are grouped together (like ST "chat files" / branches).
-  if (options.chats) {
+  if (selectedChats.length > 0) {
     const charGroupIds = new Map<string, string>();
-    const total = scanResult.chats.length;
+    const total = selectedChats.length;
     let idx = 0;
-    for (const ct of scanResult.chats) {
+    for (const ct of selectedChats) {
       idx++;
       onProgress?.({ category: "Chats", item: ct.characterName, current: idx, total, imported });
       try {
         const content = await readFile(ct.path, "utf-8");
+        const fileInfo = await stat(ct.path);
         // Try matching by header character_name first, then by folder name (ST uses filenames for folders)
         const charId =
           charNameToId.get(ct.characterName.toLowerCase().trim()) ??
@@ -530,6 +639,7 @@ export async function runSTBulkImport(
           characterId: charId,
           chatName: ct.characterName,
           groupId: charGroupIds.get(groupKey)!,
+          timestampOverrides: getFileTimestampOverrides(fileInfo),
         });
         imported.chats++;
       } catch (err) {
@@ -539,15 +649,16 @@ export async function runSTBulkImport(
   }
 
   // Import group chats
-  if (options.groupChats) {
+  if (selectedGroupChats.length > 0) {
     const gcGroupIds = new Map<string, string>();
-    const total = scanResult.groupChats.length;
+    const total = selectedGroupChats.length;
     let idx = 0;
-    for (const gc of scanResult.groupChats) {
+    for (const gc of selectedGroupChats) {
       idx++;
       onProgress?.({ category: "Group Chats", item: gc.groupName, current: idx, total, imported });
       try {
         const content = await readFile(gc.path, "utf-8");
+        const fileInfo = await stat(gc.path);
         // Build speaker→characterId map from member names
         const speakerMap: Record<string, string> = {};
         for (const memberName of gc.members) {
@@ -563,6 +674,7 @@ export async function runSTBulkImport(
           speakerMap,
           mode: "roleplay",
           groupId: gcGroupIds.get(groupKey)!,
+          timestampOverrides: getFileTimestampOverrides(fileInfo),
         });
         imported.groupChats++;
       } catch (err) {
@@ -572,15 +684,16 @@ export async function runSTBulkImport(
   }
 
   // Import presets
-  if (options.presets) {
-    const total = scanResult.presets.length;
+  if (selectedPresets.length > 0) {
+    const total = selectedPresets.length;
     let idx = 0;
-    for (const pr of scanResult.presets) {
+    for (const pr of selectedPresets) {
       idx++;
       onProgress?.({ category: "Presets", item: pr.name, current: idx, total, imported });
       try {
         const raw = JSON.parse(await readFile(pr.path, "utf-8"));
-        await importSTPreset(raw, db, pr.name);
+        const fileInfo = await stat(pr.path);
+        await importSTPreset(raw, db, pr.name, { timestampOverrides: getFileTimestampOverrides(fileInfo) });
         imported.presets++;
       } catch (err) {
         errors.push(`Preset "${pr.name}": ${(err as Error).message}`);
@@ -589,15 +702,19 @@ export async function runSTBulkImport(
   }
 
   // Import lorebooks
-  if (options.lorebooks) {
-    const total = scanResult.lorebooks.length;
+  if (selectedLorebooks.length > 0) {
+    const total = selectedLorebooks.length;
     let idx = 0;
-    for (const lb of scanResult.lorebooks) {
+    for (const lb of selectedLorebooks) {
       idx++;
       onProgress?.({ category: "Lorebooks", item: lb.name, current: idx, total, imported });
       try {
         const raw = JSON.parse(await readFile(lb.path, "utf-8"));
-        await importSTLorebook(raw, db, { fallbackName: lb.name });
+        const fileInfo = await stat(lb.path);
+        await importSTLorebook(raw, db, {
+          fallbackName: lb.name,
+          timestampOverrides: getFileTimestampOverrides(fileInfo),
+        });
         imported.lorebooks++;
       } catch (err) {
         errors.push(`Lorebook "${lb.name}": ${(err as Error).message}`);
@@ -606,14 +723,14 @@ export async function runSTBulkImport(
   }
 
   // Import backgrounds
-  if (options.backgrounds) {
+  if (selectedBackgrounds.length > 0) {
     // Ensure our backgrounds directory exists
     if (!existsSync(BG_DIR)) {
       await mkdir(BG_DIR, { recursive: true });
     }
-    const total = scanResult.backgrounds.length;
+    const total = selectedBackgrounds.length;
     let idx = 0;
-    for (const bg of scanResult.backgrounds) {
+    for (const bg of selectedBackgrounds) {
       idx++;
       onProgress?.({ category: "Backgrounds", item: bg.name, current: idx, total, imported });
       try {
@@ -628,15 +745,15 @@ export async function runSTBulkImport(
   }
 
   // Import personas
-  if (options.personas) {
+  if (selectedPersonas.length > 0) {
     const storage = createCharactersStorage(db);
     const AVATAR_DIR = join(DATA_DIR, "avatars");
     if (!existsSync(AVATAR_DIR)) {
       await mkdir(AVATAR_DIR, { recursive: true });
     }
-    const total = scanResult.personas.length;
+    const total = selectedPersonas.length;
     let idx = 0;
-    for (const p of scanResult.personas) {
+    for (const p of selectedPersonas) {
       idx++;
       onProgress?.({ category: "Personas", item: p.name, current: idx, total, imported });
       try {
@@ -645,7 +762,8 @@ export async function runSTBulkImport(
         const destName = `${randomUUID()}${ext}`;
         await copyFile(p.path, join(AVATAR_DIR, destName));
         const avatarPath = `/api/avatars/file/${destName}`;
-        await storage.createPersona(p.name, p.description, avatarPath);
+        const fileInfo = await stat(p.path);
+        await storage.createPersona(p.name, p.description, avatarPath, undefined, getFileTimestampOverrides(fileInfo));
         imported.personas++;
       } catch (err) {
         errors.push(`Persona "${p.name}": ${(err as Error).message}`);

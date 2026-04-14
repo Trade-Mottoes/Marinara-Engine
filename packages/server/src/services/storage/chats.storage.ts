@@ -17,8 +17,18 @@ import { existsSync, rmSync } from "fs";
 import { join } from "path";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import type { CreateChatInput, CreateMessageInput } from "@marinara-engine/shared";
+import { latestTrustedTimestamp, normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
 
 const GALLERY_DIR = join(DATA_DIR, "gallery");
+
+function resolveTimestamps(overrides?: TimestampOverrides | null) {
+  const normalized = normalizeTimestampOverrides(overrides);
+  const createdAt = normalized?.createdAt ?? now();
+  return {
+    createdAt,
+    updatedAt: normalized?.updatedAt ?? createdAt,
+  };
+}
 
 export function createChatsStorage(db: DB) {
   return {
@@ -31,9 +41,9 @@ export function createChatsStorage(db: DB) {
       return rows[0] ?? null;
     },
 
-    async create(input: CreateChatInput) {
+    async create(input: CreateChatInput, timestampOverrides?: TimestampOverrides | null) {
       const id = newId();
-      const timestamp = now();
+      const timestamp = resolveTimestamps(timestampOverrides);
       await db.insert(chats).values({
         id,
         name: input.name,
@@ -51,8 +61,8 @@ export function createChatsStorage(db: DB) {
           activeAgentIds: [],
           activeToolIds: [],
         }),
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: timestamp.createdAt,
+        updatedAt: timestamp.updatedAt,
       });
       return this.getById(id);
     },
@@ -167,9 +177,9 @@ export function createChatsStorage(db: DB) {
       return rows[0] ?? null;
     },
 
-    async createMessage(input: CreateMessageInput) {
+    async createMessage(input: CreateMessageInput, timestampOverrides?: TimestampOverrides | null) {
       const id = newId();
-      const timestamp = now();
+      const timestamp = resolveTimestamps(timestampOverrides).createdAt;
       await db.insert(messages).values({
         id,
         chatId: input.chatId,
@@ -205,16 +215,28 @@ export function createChatsStorage(db: DB) {
      * Does NOT return the created messages or update chat.updatedAt per message —
      * caller should update chat.updatedAt once after the batch.
      */
-    async createMessagesBatch(chatId: string, inputs: Omit<CreateMessageInput, "chatId">[]) {
+    async createMessagesBatch(
+      chatId: string,
+      inputs: Array<Omit<CreateMessageInput, "chatId"> & { createdAt?: string | null }>,
+      timestampOverrides?: TimestampOverrides | null,
+    ) {
       if (inputs.length === 0) return;
       const msgRows: (typeof messages.$inferInsert)[] = [];
       const swipeRows: (typeof messageSwipes.$inferInsert)[] = [];
-      const baseTime = Date.now();
+      const batchTimestamps = resolveTimestamps(timestampOverrides);
+      const baseTime = Date.parse(batchTimestamps.createdAt);
+      const safeBaseTime = Number.isNaN(baseTime) ? Date.now() : baseTime;
+      const createdTimestamps: string[] = [];
 
       for (let idx = 0; idx < inputs.length; idx++) {
         const input = inputs[idx]!;
         const id = newId();
-        const timestamp = new Date(baseTime + idx).toISOString();
+        const explicitTimestamp = normalizeTimestampOverrides({
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+        })?.createdAt;
+        const timestamp = explicitTimestamp ?? new Date(safeBaseTime + idx).toISOString();
+        createdTimestamps.push(timestamp);
         msgRows.push({
           id,
           chatId,
@@ -240,7 +262,7 @@ export function createChatsStorage(db: DB) {
         });
       }
 
-      const lastTimestamp = new Date(baseTime + inputs.length - 1).toISOString();
+      const lastTimestamp = latestTrustedTimestamp(createdTimestamps) ?? batchTimestamps.updatedAt;
 
       // Batch in chunks of 500 to stay within SQLite variable limits
       const CHUNK = 500;

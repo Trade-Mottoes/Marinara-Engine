@@ -11,8 +11,10 @@ import { join } from "path";
 import { randomUUID } from "crypto";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import AdmZip from "adm-zip";
+import { normalizeTimestampOverrides, type TimestampOverrides } from "./import-timestamps.js";
 
 const AVATAR_DIR = join(DATA_DIR, "avatars");
+const IMPORT_METADATA_KEY = "importMetadata";
 
 function ensureAvatarDir() {
   if (!existsSync(AVATAR_DIR)) {
@@ -25,8 +27,13 @@ function ensureAvatarDir() {
  * Handles V1, V2, Pygmalion, and RisuAI formats.
  * If _avatarDataUrl is present, saves the avatar image.
  */
-export async function importSTCharacter(raw: Record<string, unknown>, db: DB) {
+export async function importSTCharacter(
+  raw: Record<string, unknown>,
+  db: DB,
+  options?: { timestampOverrides?: TimestampOverrides | null },
+) {
   const storage = createCharactersStorage(db);
+  const normalizedTimestamps = normalizeTimestampOverrides(options?.timestampOverrides);
 
   // Extract avatar data URL if present (from PNG import)
   const avatarDataUrl = raw._avatarDataUrl as string | null;
@@ -58,6 +65,23 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB) {
     data.extensions.botBrowserSource = botBrowserSource;
   }
 
+  const existingImportMetadata =
+    data.extensions[IMPORT_METADATA_KEY] && typeof data.extensions[IMPORT_METADATA_KEY] === "object"
+      ? (data.extensions[IMPORT_METADATA_KEY] as Record<string, unknown>)
+      : {};
+  const cardSpecMetadata = buildCardSpecMetadata(raw);
+  const hasEmbeddedLorebook = !!data.character_book?.entries?.length;
+  data.extensions[IMPORT_METADATA_KEY] = {
+    ...existingImportMetadata,
+    ...(cardSpecMetadata ? { card: cardSpecMetadata } : {}),
+    embeddedLorebook: {
+      ...(typeof existingImportMetadata.embeddedLorebook === "object" && existingImportMetadata.embeddedLorebook
+        ? (existingImportMetadata.embeddedLorebook as Record<string, unknown>)
+        : {}),
+      hasEmbeddedLorebook,
+    },
+  };
+
   // Save avatar image if provided
   let avatarPath: string | undefined;
   if (avatarDataUrl && avatarDataUrl.startsWith("data:image/")) {
@@ -74,7 +98,7 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB) {
     }
   }
 
-  const character = await storage.create(data, avatarPath);
+  const character = await storage.create(data, avatarPath, normalizedTimestamps);
   const charId = (character as { id?: string } | null)?.id;
 
   // Extract character_book into a standalone lorebook linked to this character
@@ -92,12 +116,33 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB) {
       const result = await importSTLorebook(wiData, db, {
         characterId: charId,
         namePrefix: data.name,
+        timestampOverrides: options?.timestampOverrides,
       });
       if (result && "lorebookId" in result) {
         lorebookResult = {
           lorebookId: result.lorebookId as string,
           entriesImported: result.entriesImported as number,
         };
+
+        const updatedImportMetadata = {
+          ...(data.extensions[IMPORT_METADATA_KEY] as Record<string, unknown>),
+          embeddedLorebook: {
+            ...(((data.extensions[IMPORT_METADATA_KEY] as Record<string, unknown>)?.embeddedLorebook as
+              | Record<string, unknown>
+              | undefined) ?? {}),
+            hasEmbeddedLorebook: true,
+            lorebookId: result.lorebookId as string,
+          },
+        };
+        data.extensions[IMPORT_METADATA_KEY] = updatedImportMetadata;
+        await storage.update(
+          charId,
+          { extensions: { ...data.extensions } },
+          undefined,
+          {
+            updatedAt: normalizedTimestamps?.updatedAt ?? normalizedTimestamps?.createdAt ?? null,
+          },
+        );
       }
     } catch {
       // Non-fatal — character was imported, just lorebook extraction failed
@@ -116,7 +161,7 @@ export async function importSTCharacter(raw: Record<string, unknown>, db: DB) {
  * Import a CharX (.charx) file — RisuAI Character Card V3 zip format.
  * Extracts card.json and the main icon asset from the zip.
  */
-export async function importCharX(buf: Buffer, db: DB) {
+export async function importCharX(buf: Buffer, db: DB, options?: { timestampOverrides?: TimestampOverrides | null }) {
   const zip = new AdmZip(buf);
 
   // Extract card.json from root of the zip
@@ -166,7 +211,18 @@ export async function importCharX(buf: Buffer, db: DB) {
     cardJson._avatarDataUrl = avatarDataUrl;
   }
 
-  return importSTCharacter(cardJson as Record<string, unknown>, db);
+  return importSTCharacter(cardJson as Record<string, unknown>, db, options);
+}
+
+function buildCardSpecMetadata(raw: Record<string, unknown>) {
+  const spec = typeof raw.spec === "string" ? raw.spec : null;
+  const specVersion = typeof raw.spec_version === "string" ? raw.spec_version : null;
+  if (!spec && !specVersion) return null;
+
+  return {
+    ...(spec ? { spec } : {}),
+    ...(specVersion ? { specVersion } : {}),
+  };
 }
 
 /** Resolve an asset URI from a CharX zip to a data URL. */

@@ -11,6 +11,16 @@ import type {
   CreateLorebookEntryInput,
   UpdateLorebookEntryInput,
 } from "@marinara-engine/shared";
+import { normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
+
+function resolveTimestamps(overrides?: TimestampOverrides | null) {
+  const normalized = normalizeTimestampOverrides(overrides);
+  const createdAt = normalized?.createdAt ?? now();
+  return {
+    createdAt,
+    updatedAt: normalized?.updatedAt ?? createdAt,
+  };
+}
 
 /** Parse DB row booleans ("true"/"false") → real booleans and JSON strings → objects. */
 function parseLorebookRow(row: Record<string, unknown>) {
@@ -90,9 +100,9 @@ export function createLorebooksStorage(db: DB) {
       return row ? parseLorebookRow(row as Record<string, unknown>) : null;
     },
 
-    async create(input: CreateLorebookInput) {
+    async create(input: CreateLorebookInput, timestampOverrides?: TimestampOverrides | null) {
       const id = newId();
-      const timestamp = now();
+      const timestamp = resolveTimestamps(timestampOverrides);
       await db.insert(lorebooks).values({
         id,
         name: input.name,
@@ -108,8 +118,8 @@ export function createLorebooksStorage(db: DB) {
         tags: input.tags ? JSON.stringify(input.tags) : "[]",
         generatedBy: input.generatedBy ?? null,
         sourceAgentId: input.sourceAgentId ?? null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: timestamp.createdAt,
+        updatedAt: timestamp.updatedAt,
       });
       return this.getById(id);
     },

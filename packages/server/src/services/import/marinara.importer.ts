@@ -6,6 +6,25 @@ import type { ExportEnvelope, ExportType } from "@marinara-engine/shared";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
 import { createPromptsStorage } from "../storage/prompts.storage.js";
+import { normalizeTimestampOverrides, type TimestampOverrides } from "./import-timestamps.js";
+
+function readTimestampOverrides(value: unknown): TimestampOverrides | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const metadata =
+    record.metadata && typeof record.metadata === "object" ? (record.metadata as Record<string, unknown>) : undefined;
+  const timestamps =
+    record.timestamps && typeof record.timestamps === "object"
+      ? (record.timestamps as Record<string, unknown>)
+      : metadata?.timestamps && typeof metadata.timestamps === "object"
+        ? (metadata.timestamps as Record<string, unknown>)
+        : undefined;
+
+  return normalizeTimestampOverrides({
+    createdAt: timestamps?.createdAt ?? metadata?.createdAt ?? record.createdAt,
+    updatedAt: timestamps?.updatedAt ?? metadata?.updatedAt ?? record.updatedAt,
+  });
+}
 
 /**
  * Import a Marinara `.marinara.json` export envelope.
@@ -37,12 +56,41 @@ export async function importMarinara(
 
 async function importCharacter(data: unknown, db: DB) {
   const storage = createCharactersStorage(db);
-  const d = data as { data?: Record<string, unknown>; spec?: string };
-  const charData = d?.data;
+  const d = data as { data?: Record<string, unknown>; spec?: string; spec_version?: string; metadata?: unknown };
+  const charData = d?.data ? { ...(d.data as Record<string, unknown>) } : undefined;
   if (!charData || typeof charData !== "object") {
     return { success: false, type: "marinara_character" as const, error: "Invalid character data" };
   }
-  const result = await storage.create(charData as any);
+  const extensions =
+    charData.extensions && typeof charData.extensions === "object"
+      ? ({ ...(charData.extensions as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const existingImportMetadata =
+    extensions.importMetadata && typeof extensions.importMetadata === "object"
+      ? (extensions.importMetadata as Record<string, unknown>)
+      : {};
+  const cardSpecMetadata =
+    typeof d?.spec === "string" || typeof d?.spec_version === "string"
+      ? {
+          ...(typeof d.spec === "string" ? { spec: d.spec } : {}),
+          ...(typeof d.spec_version === "string" ? { specVersion: d.spec_version } : {}),
+        }
+      : null;
+
+  if (cardSpecMetadata) {
+    extensions.importMetadata = {
+      ...existingImportMetadata,
+      card: {
+        ...(existingImportMetadata.card && typeof existingImportMetadata.card === "object"
+          ? (existingImportMetadata.card as Record<string, unknown>)
+          : {}),
+        ...cardSpecMetadata,
+      },
+    };
+    charData.extensions = extensions;
+  }
+
+  const result = await storage.create(charData as any, undefined, readTimestampOverrides(d));
   return {
     success: true,
     type: "marinara_character" as const,
@@ -72,6 +120,7 @@ async function importPersona(data: unknown, db: DB) {
       dialogueColor: String(d.dialogueColor ?? ""),
       boxColor: String(d.boxColor ?? ""),
     },
+    readTimestampOverrides(d),
   );
   return {
     success: true,
@@ -90,16 +139,19 @@ async function importLorebook(data: unknown, db: DB) {
     return { success: false, type: "marinara_lorebook" as const, error: "Invalid lorebook data" };
   }
   const lb = d.lorebook;
-  const newLb = (await storage.create({
-    name: String(lb.name ?? "Imported Lorebook"),
-    description: String(lb.description ?? ""),
-    category: (lb.category as any) ?? "uncategorized",
-    scanDepth: Number(lb.scanDepth ?? 2),
-    tokenBudget: Number(lb.tokenBudget ?? 2048),
-    recursiveScanning: Boolean(lb.recursiveScanning),
-    enabled: lb.enabled !== false,
-    generatedBy: "import",
-  })) as Record<string, unknown> | null;
+  const newLb = (await storage.create(
+    {
+      name: String(lb.name ?? "Imported Lorebook"),
+      description: String(lb.description ?? ""),
+      category: (lb.category as any) ?? "uncategorized",
+      scanDepth: Number(lb.scanDepth ?? 2),
+      tokenBudget: Number(lb.tokenBudget ?? 2048),
+      recursiveScanning: Boolean(lb.recursiveScanning),
+      enabled: lb.enabled !== false,
+      generatedBy: "import",
+    },
+    readTimestampOverrides(lb),
+  )) as Record<string, unknown> | null;
 
   if (newLb && Array.isArray(d.entries) && d.entries.length > 0) {
     const entries = d.entries.map((e) => ({
@@ -158,15 +210,18 @@ async function importPreset(data: unknown, db: DB) {
   const p = d.preset;
 
   // Create the base preset
-  const newPreset = await storage.create({
-    name: String(p.name ?? "Imported Preset"),
-    description: String(p.description ?? ""),
-    variableGroups: safeParseJson(p.variableGroups, []),
-    variableValues: safeParseJson(p.variableValues, {}),
-    parameters: safeParseJson(p.parameters, {}),
-    wrapFormat: (p.wrapFormat as any) ?? "xml",
-    author: String(p.author ?? ""),
-  });
+  const newPreset = await storage.create(
+    {
+      name: String(p.name ?? "Imported Preset"),
+      description: String(p.description ?? ""),
+      variableGroups: safeParseJson(p.variableGroups, []),
+      variableValues: safeParseJson(p.variableValues, {}),
+      parameters: safeParseJson(p.parameters, {}),
+      wrapFormat: (p.wrapFormat as any) ?? "xml",
+      author: String(p.author ?? ""),
+    },
+    readTimestampOverrides(p),
+  );
   if (!newPreset) {
     return { success: false, type: "marinara_preset" as const, error: "Failed to create preset" };
   }

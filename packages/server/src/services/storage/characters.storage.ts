@@ -6,6 +6,16 @@ import type { DB } from "../../db/connection.js";
 import { characters, personas, characterGroups, personaGroups } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
 import type { CharacterData } from "@marinara-engine/shared";
+import { normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
+
+function resolveTimestamps(overrides?: TimestampOverrides | null) {
+  const normalized = normalizeTimestampOverrides(overrides);
+  const createdAt = normalized?.createdAt ?? now();
+  return {
+    createdAt,
+    updatedAt: normalized?.updatedAt ?? createdAt,
+  };
+}
 
 export function createCharactersStorage(db: DB) {
   return {
@@ -20,31 +30,40 @@ export function createCharactersStorage(db: DB) {
       return rows[0] ?? null;
     },
 
-    async create(data: CharacterData, avatarPath?: string) {
+    async create(data: CharacterData, avatarPath?: string, timestampOverrides?: TimestampOverrides | null) {
       const id = newId();
-      const timestamp = now();
+      const timestamp = resolveTimestamps(timestampOverrides);
       await db.insert(characters).values({
         id,
         data: JSON.stringify(data),
         avatarPath: avatarPath ?? null,
         spriteFolderPath: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: timestamp.createdAt,
+        updatedAt: timestamp.updatedAt,
       });
       return this.getById(id);
     },
 
-    async update(id: string, data: Partial<CharacterData>, avatarPath?: string) {
+    async update(
+      id: string,
+      data: Partial<CharacterData>,
+      avatarPath?: string,
+      options?: { updatedAt?: string | null },
+    ) {
       const existing = await this.getById(id);
       if (!existing) return null;
       const currentData = JSON.parse(existing.data) as CharacterData;
       const merged = { ...currentData, ...data };
+      const updatedAt = normalizeTimestampOverrides({
+        createdAt: options?.updatedAt,
+        updatedAt: options?.updatedAt,
+      })?.updatedAt;
       await db
         .update(characters)
         .set({
           data: JSON.stringify(merged),
           ...(avatarPath !== undefined && { avatarPath }),
-          updatedAt: now(),
+          updatedAt: updatedAt ?? now(),
         })
         .where(eq(characters.id, id));
       return this.getById(id);
@@ -87,9 +106,10 @@ export function createCharactersStorage(db: DB) {
         altDescriptions?: string;
         tags?: string;
       },
+      timestampOverrides?: TimestampOverrides | null,
     ) {
       const id = newId();
-      const timestamp = now();
+      const timestamp = resolveTimestamps(timestampOverrides);
       await db.insert(personas).values({
         id,
         name,
@@ -107,8 +127,8 @@ export function createCharactersStorage(db: DB) {
         personaStats: extra?.personaStats ?? "",
         altDescriptions: extra?.altDescriptions ?? "[]",
         tags: extra?.tags ?? "[]",
-        createdAt: timestamp,
-        updatedAt: timestamp,
+        createdAt: timestamp.createdAt,
+        updatedAt: timestamp.updatedAt,
       });
       return this.getPersona(id);
     },

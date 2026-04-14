@@ -20,6 +20,7 @@ import {
   ChevronRight,
   ArrowLeft,
   Folder,
+  Check,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "../../lib/utils";
@@ -29,17 +30,24 @@ interface Props {
   onClose: () => void;
 }
 
+interface ScanItemBase {
+  id: string;
+  path: string;
+  name: string;
+  modifiedAt: string | null;
+}
+
 interface ScanResult {
   success: boolean;
   error?: string;
   dataDir?: string;
-  characters: { path: string; name: string; format: string }[];
-  chats: { path: string; characterName: string; folderName: string }[];
-  groupChats: { path: string; groupName: string; members: string[] }[];
-  presets: { path: string; name: string }[];
-  lorebooks: { path: string; name: string }[];
-  backgrounds: { path: string; name: string }[];
-  personas: { path: string; name: string }[];
+  characters: Array<ScanItemBase & { format: string }>;
+  chats: Array<ScanItemBase & { characterName: string; folderName: string }>;
+  groupChats: Array<ScanItemBase & { groupName: string; members: string[] }>;
+  presets: Array<ScanItemBase & { isBuiltin?: boolean }>;
+  lorebooks: ScanItemBase[];
+  backgrounds: ScanItemBase[];
+  personas: Array<ScanItemBase & { description: string }>;
 }
 
 interface ImportResult {
@@ -66,28 +74,62 @@ interface ImportProgress {
 }
 
 type Phase = "input" | "scanning" | "preview" | "importing" | "done";
+type CategoryKey = "characters" | "chats" | "groupChats" | "presets" | "lorebooks" | "backgrounds" | "personas";
+type SelectionState = Record<CategoryKey, string[]>;
+
+function buildInitialSelection(scan: ScanResult): SelectionState {
+  return {
+    characters: scan.characters.map((item) => item.id),
+    chats: scan.chats.map((item) => item.id),
+    groupChats: scan.groupChats.map((item) => item.id),
+    presets: scan.presets.filter((item) => !item.isBuiltin).map((item) => item.id),
+    lorebooks: scan.lorebooks.map((item) => item.id),
+    backgrounds: scan.backgrounds.map((item) => item.id),
+    personas: scan.personas.map((item) => item.id),
+  };
+}
+
+function formatModifiedAt(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
 
 export function STBulkImportModal({ open, onClose }: Props) {
   const [folderPath, setFolderPath] = useState("");
   const [phase, setPhase] = useState<Phase>("input");
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [selection, setSelection] = useState<SelectionState>({
+    characters: [],
+    chats: [],
+    groupChats: [],
+    presets: [],
+    lorebooks: [],
+    backgrounds: [],
+    personas: [],
+  });
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState("");
-  const [options, setOptions] = useState({
-    characters: true,
-    chats: true,
-    groupChats: true,
-    presets: true,
-    lorebooks: true,
-    backgrounds: true,
-    personas: true,
-  });
   const qc = useQueryClient();
 
   const reset = useCallback(() => {
     setPhase("input");
     setScanResult(null);
+    setSelection({
+      characters: [],
+      chats: [],
+      groupChats: [],
+      presets: [],
+      lorebooks: [],
+      backgrounds: [],
+      personas: [],
+    });
     setImportResult(null);
     setProgress(null);
     setError("");
@@ -112,6 +154,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
       const data = (await res.json()) as ScanResult;
       if (data.success) {
         setScanResult(data);
+        setSelection(buildInitialSelection(data));
         setPhase("preview");
       } else {
         setError(data.error ?? "Scan failed");
@@ -143,7 +186,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
         setBrowserFolders(data.folders ?? []);
       }
     } catch {
-      // silent
+      // Silent fallback
     }
     setBrowserLoading(false);
   }, []);
@@ -160,24 +203,37 @@ export function STBulkImportModal({ open, onClose }: Props) {
         return;
       }
     } catch {
-      // native picker failed
+      // Native picker failed — fall back to browser below
     }
     setPicking(false);
-    // Native picker didn't return a path — fall back to directory browser
     setShowFolderBrowser(true);
     loadDirectory(folderPath || undefined);
   }, [folderPath, loadDirectory]);
+
+  const updateCategorySelection = useCallback((category: CategoryKey, nextIds: string[]) => {
+    setSelection((prev) => ({ ...prev, [category]: nextIds }));
+  }, []);
+
+  const toggleCategoryItem = useCallback((category: CategoryKey, itemId: string, checked: boolean) => {
+    setSelection((prev) => {
+      const existing = new Set(prev[category]);
+      if (checked) existing.add(itemId);
+      else existing.delete(itemId);
+      return { ...prev, [category]: [...existing] };
+    });
+  }, []);
 
   const handleImport = useCallback(async () => {
     if (!folderPath.trim()) return;
     setPhase("importing");
     setProgress(null);
+    setError("");
 
     try {
       const res = await fetch("/api/import/st-bulk/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folderPath: folderPath.trim(), options }),
+        body: JSON.stringify({ folderPath: folderPath.trim(), options: selection }),
       });
 
       if (!res.ok || !res.body) {
@@ -195,7 +251,6 @@ export function STBulkImportModal({ open, onClose }: Props) {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
-        // Parse SSE events from the buffer
         const parts = buffer.split("\n\n");
         buffer = parts.pop() ?? "";
 
@@ -205,7 +260,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
           let dataStr = "";
           for (const line of lines) {
             if (line.startsWith("event: ")) eventType = line.slice(7);
-            else if (line.startsWith("data: ")) dataStr = line.slice(6);
+            if (line.startsWith("data: ")) dataStr = line.slice(6);
           }
           if (!dataStr) continue;
           try {
@@ -218,33 +273,32 @@ export function STBulkImportModal({ open, onClose }: Props) {
               qc.invalidateQueries();
             }
           } catch {
-            // skip malformed events
+            // Ignore malformed SSE chunks
           }
         }
       }
-
-      // If we exited the loop without a "done" event, the phase may still be "importing"
-      // — this is fine, the SSE stream just ended cleanly after the done event was processed
     } catch {
       setError("Import failed — server error");
       setPhase("preview");
     }
-  }, [folderPath, options, qc]);
+  }, [folderPath, qc, selection]);
+
+  const hasAnySelected = Object.values(selection).some((ids) => ids.length > 0);
+  const builtinPresetCount = scanResult?.presets.filter((item) => item.isBuiltin).length ?? 0;
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import from SillyTavern" width="max-w-lg">
+    <Modal open={open} onClose={handleClose} title="Import from SillyTavern" width="max-w-3xl">
       <div className="flex flex-col gap-4">
-        {/* ── Phase: Input ── */}
         {(phase === "input" || phase === "scanning") && (
           <>
             <p className="text-xs text-[var(--muted-foreground)]">
-              Select or enter the path to your SillyTavern installation folder. We'll scan for characters, chats,
-              presets, lorebooks, and backgrounds to import.
+              Select or enter the path to your SillyTavern installation folder. We&apos;ll scan for characters, chats,
+              presets, lorebooks, backgrounds, and personas before you choose exactly what to import.
             </p>
 
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium">SillyTavern Folder Path</label>
-              <div className="flex gap-2">
+              <div className="flex gap-2 max-sm:flex-col">
                 <input
                   type="text"
                   value={folderPath}
@@ -259,7 +313,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 <button
                   onClick={handleBrowse}
                   disabled={phase === "scanning" || picking}
-                  className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium transition-all hover:bg-[var(--secondary)] active:scale-95 disabled:opacity-50"
+                  className="flex items-center justify-center gap-1 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium transition-all hover:bg-[var(--secondary)] active:scale-95 disabled:opacity-50"
                   title="Browse for folder"
                 >
                   {picking ? <Loader2 size="0.875rem" className="animate-spin" /> : <FolderOpen size="0.875rem" />}
@@ -268,13 +322,14 @@ export function STBulkImportModal({ open, onClose }: Props) {
               </div>
             </div>
 
-            {/* ── Inline Folder Browser ── */}
             {showFolderBrowser && (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/50">
                 <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
                   <button
                     onClick={() => {
-                      const parent = browserPath.replace(/\/[^/]+$/, "") || "/";
+                      const parent = browserPath.includes("\\")
+                        ? browserPath.replace(/\\[^\\]+$/, "")
+                        : browserPath.replace(/\/[^/]+$/, "") || "/";
                       if (parent !== browserPath) loadDirectory(parent);
                     }}
                     disabled={browserLoading || browserPath === "/"}
@@ -283,7 +338,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
                   >
                     <ArrowLeft size="0.75rem" />
                   </button>
-                  <span className="flex-1 truncate text-[0.625rem] font-mono text-[var(--muted-foreground)]">
+                  <span className="flex-1 truncate font-mono text-[0.625rem] text-[var(--muted-foreground)]">
                     {browserPath || "/"}
                   </span>
                   <button
@@ -307,7 +362,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
                     browserFolders.map((name) => (
                       <button
                         key={name}
-                        onClick={() => loadDirectory(`${browserPath}/${name}`)}
+                        onClick={() => loadDirectory(browserPath ? `${browserPath}\\${name}` : name)}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--accent)]"
                       >
                         <Folder size="0.8125rem" className="shrink-0 text-sky-400" />
@@ -327,7 +382,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 "flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-xs font-medium transition-all",
                 folderPath.trim() && phase !== "scanning"
                   ? "bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95"
-                  : "bg-[var(--secondary)] text-[var(--muted-foreground)] opacity-50 cursor-not-allowed",
+                  : "cursor-not-allowed bg-[var(--secondary)] text-[var(--muted-foreground)] opacity-50",
               )}
             >
               {phase === "scanning" ? (
@@ -335,104 +390,196 @@ export function STBulkImportModal({ open, onClose }: Props) {
               ) : (
                 <FolderSearch size="0.875rem" />
               )}
-              {phase === "scanning" ? "Scanning…" : "Scan Folder"}
+              {phase === "scanning" ? "Scanning..." : "Scan Folder"}
             </button>
 
             {error && (
               <div className="flex items-start gap-2 rounded-lg bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
-                <XCircle size="0.875rem" className="mt-0.5 flex-shrink-0" />
+                <XCircle size="0.875rem" className="mt-0.5 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
             <div className="rounded-lg bg-[var(--secondary)]/50 p-2.5 text-[0.625rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-              <strong>Tip:</strong> This is the main SillyTavern folder (the one containing{" "}
+              <strong>Tip:</strong> This is the main SillyTavern folder, usually the one containing{" "}
               <code className="rounded bg-[var(--secondary)] px-1">data/</code> or{" "}
-              <code className="rounded bg-[var(--secondary)] px-1">public/</code>). On most setups it's named{" "}
-              <code className="rounded bg-[var(--secondary)] px-1">SillyTavern</code>.
+              <code className="rounded bg-[var(--secondary)] px-1">public/</code>.
             </div>
           </>
         )}
 
-        {/* ── Phase: Preview ── */}
         {phase === "preview" && scanResult && (
           <>
-            <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 p-2.5 text-xs text-emerald-400">
-              <CheckCircle size="0.875rem" />
+            <div className="flex items-start gap-2 rounded-lg bg-emerald-500/10 p-2.5 text-xs text-emerald-400">
+              <CheckCircle size="0.875rem" className="mt-0.5 shrink-0" />
               <span>
-                Found ST data in{" "}
+                Found SillyTavern data in{" "}
                 <code className="rounded bg-[var(--secondary)] px-1 text-[0.625rem]">{scanResult.dataDir}</code>
               </span>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <span className="text-xs font-medium">Select what to import:</span>
+            {builtinPresetCount > 0 && (
+              <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-2.5 text-xs text-amber-400">
+                <AlertTriangle size="0.875rem" className="mt-0.5 shrink-0" />
+                <span>
+                  {builtinPresetCount} built-in preset{builtinPresetCount !== 1 ? "s were" : " was"} detected and left
+                  unchecked by default so only likely custom presets come across unless you opt in.
+                </span>
+              </div>
+            )}
 
-              <ImportCategory
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium">Choose exactly what to import</span>
+                <span className="text-[0.6875rem] text-[var(--muted-foreground)]">
+                  {Object.values(selection).reduce((sum, ids) => sum + ids.length, 0)} selected
+                </span>
+              </div>
+
+              <SelectableImportCategory
                 icon={<Users size="0.875rem" />}
                 label="Characters"
-                count={scanResult.characters.length}
-                items={scanResult.characters.map((c) => c.name)}
-                checked={options.characters}
-                onChange={(v) => setOptions((o) => ({ ...o, characters: v }))}
+                items={scanResult.characters}
+                selectedIds={selection.characters}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("characters", itemId, checked)}
+                onSelectAll={() => updateCategorySelection("characters", scanResult.characters.map((item) => item.id))}
+                onSelectNone={() => updateCategorySelection("characters", [])}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  return (
+                    <span>
+                      {item.format.toUpperCase()}
+                      {modified ? ` · modified ${modified}` : ""}
+                    </span>
+                  );
+                }}
               />
 
-              <ImportCategory
+              <SelectableImportCategory
                 icon={<MessageSquare size="0.875rem" />}
                 label="Chats"
-                count={scanResult.chats.length}
-                items={scanResult.chats.map((c) => c.characterName)}
-                checked={options.chats}
-                onChange={(v) => setOptions((o) => ({ ...o, chats: v }))}
+                items={scanResult.chats}
+                selectedIds={selection.chats}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("chats", itemId, checked)}
+                onSelectAll={() => updateCategorySelection("chats", scanResult.chats.map((item) => item.id))}
+                onSelectNone={() => updateCategorySelection("chats", [])}
+                getItemLabel={(item) => item.characterName || item.name}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  return (
+                    <span>
+                      Folder: {item.folderName}
+                      {modified ? ` · modified ${modified}` : ""}
+                    </span>
+                  );
+                }}
               />
 
-              <ImportCategory
+              <SelectableImportCategory
                 icon={<Users size="0.875rem" />}
                 label="Group Chats"
-                count={scanResult.groupChats?.length ?? 0}
-                items={(scanResult.groupChats ?? []).map((g) => `${g.groupName} (${g.members.join(", ")})`)}
-                checked={options.groupChats}
-                onChange={(v) => setOptions((o) => ({ ...o, groupChats: v }))}
+                items={scanResult.groupChats}
+                selectedIds={selection.groupChats}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("groupChats", itemId, checked)}
+                onSelectAll={() => updateCategorySelection("groupChats", scanResult.groupChats.map((item) => item.id))}
+                onSelectNone={() => updateCategorySelection("groupChats", [])}
+                getItemLabel={(item) => item.groupName || item.name}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  return (
+                    <span>
+                      {item.members.length > 0 ? item.members.join(", ") : "No linked members"}
+                      {modified ? ` · modified ${modified}` : ""}
+                    </span>
+                  );
+                }}
               />
 
-              <ImportCategory
+              <SelectableImportCategory
                 icon={<FileText size="0.875rem" />}
                 label="Presets"
-                count={scanResult.presets.length}
-                items={scanResult.presets.map((p) => p.name)}
-                checked={options.presets}
-                onChange={(v) => setOptions((o) => ({ ...o, presets: v }))}
+                items={scanResult.presets}
+                selectedIds={selection.presets}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("presets", itemId, checked)}
+                onSelectAll={() => updateCategorySelection("presets", scanResult.presets.map((item) => item.id))}
+                onSelectNone={() => updateCategorySelection("presets", [])}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  return (
+                    <span>
+                      {item.isBuiltin ? "Detected built-in preset" : "Custom or user preset"}
+                      {modified ? ` · modified ${modified}` : ""}
+                    </span>
+                  );
+                }}
+                renderBadge={(item) =>
+                  item.isBuiltin ? (
+                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[0.5625rem] font-medium text-amber-400">
+                      Built-in
+                    </span>
+                  ) : null
+                }
               />
 
-              <ImportCategory
+              <SelectableImportCategory
                 icon={<BookOpen size="0.875rem" />}
                 label="Lorebooks"
-                count={scanResult.lorebooks.length}
-                items={scanResult.lorebooks.map((l) => l.name)}
-                checked={options.lorebooks}
-                onChange={(v) => setOptions((o) => ({ ...o, lorebooks: v }))}
+                items={scanResult.lorebooks}
+                selectedIds={selection.lorebooks}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("lorebooks", itemId, checked)}
+                onSelectAll={() => updateCategorySelection("lorebooks", scanResult.lorebooks.map((item) => item.id))}
+                onSelectNone={() => updateCategorySelection("lorebooks", [])}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  return modified ? <span>Modified {modified}</span> : null;
+                }}
               />
 
-              <ImportCategory
+              <SelectableImportCategory
                 icon={<Image size="0.875rem" />}
                 label="Backgrounds"
-                count={scanResult.backgrounds.length}
-                items={scanResult.backgrounds.map((b) => b.name)}
-                checked={options.backgrounds}
-                onChange={(v) => setOptions((o) => ({ ...o, backgrounds: v }))}
+                items={scanResult.backgrounds}
+                selectedIds={selection.backgrounds}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("backgrounds", itemId, checked)}
+                onSelectAll={() =>
+                  updateCategorySelection("backgrounds", scanResult.backgrounds.map((item) => item.id))
+                }
+                onSelectNone={() => updateCategorySelection("backgrounds", [])}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  return modified ? <span>Modified {modified}</span> : null;
+                }}
               />
 
-              <ImportCategory
+              <SelectableImportCategory
                 icon={<UserCircle size="0.875rem" />}
                 label="Personas"
-                count={scanResult.personas?.length ?? 0}
-                items={(scanResult.personas ?? []).map((p) => p.name)}
-                checked={options.personas}
-                onChange={(v) => setOptions((o) => ({ ...o, personas: v }))}
+                items={scanResult.personas}
+                selectedIds={selection.personas}
+                onToggleItem={(itemId, checked) => toggleCategoryItem("personas", itemId, checked)}
+                onSelectAll={() => updateCategorySelection("personas", scanResult.personas.map((item) => item.id))}
+                onSelectNone={() => updateCategorySelection("personas", [])}
+                renderDetails={(item) => {
+                  const modified = formatModifiedAt(item.modifiedAt);
+                  const description = item.description?.trim();
+                  return (
+                    <span>
+                      {description || "No description"}
+                      {modified ? ` · modified ${modified}` : ""}
+                    </span>
+                  );
+                }}
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            {error && (
+              <div className="flex items-start gap-2 rounded-lg bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
+                <XCircle size="0.875rem" className="mt-0.5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 max-sm:flex-col">
               <button
                 onClick={reset}
                 className="flex-1 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium transition-all hover:bg-[var(--secondary)] active:scale-95"
@@ -441,18 +588,12 @@ export function STBulkImportModal({ open, onClose }: Props) {
               </button>
               <button
                 onClick={handleImport}
-                disabled={
-                  !options.characters &&
-                  !options.chats &&
-                  !options.groupChats &&
-                  !options.presets &&
-                  !options.lorebooks &&
-                  !options.backgrounds &&
-                  !options.personas
-                }
+                disabled={!hasAnySelected}
                 className={cn(
                   "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-all active:scale-95",
-                  "bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90",
+                  hasAnySelected
+                    ? "bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90"
+                    : "cursor-not-allowed bg-[var(--secondary)] text-[var(--muted-foreground)] opacity-60",
                 )}
               >
                 <Import size="0.875rem" />
@@ -462,11 +603,10 @@ export function STBulkImportModal({ open, onClose }: Props) {
           </>
         )}
 
-        {/* ── Phase: Importing ── */}
         {phase === "importing" && (
           <div className="flex flex-col items-center gap-4 py-6">
             <Loader2 size="2rem" className="animate-spin text-[var(--primary)]" />
-            <p className="text-sm font-medium">Importing your data…</p>
+            <p className="text-sm font-medium">Importing your data...</p>
             {progress ? (
               <div className="flex w-full flex-col gap-2">
                 <div className="flex items-center justify-between text-xs">
@@ -478,12 +618,11 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--secondary)]">
                   <div
                     className="h-full rounded-full bg-[var(--primary)] transition-all duration-200"
-                    style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+                    style={{ width: `${Math.round((progress.current / Math.max(progress.total, 1)) * 100)}%` }}
                   />
                 </div>
                 <p className="truncate text-[0.6875rem] text-[var(--muted-foreground)]">{progress.item}</p>
 
-                {/* Running totals */}
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[0.625rem] text-[var(--muted-foreground)]">
                   {progress.imported.characters > 0 && <span>{progress.imported.characters} characters</span>}
                   {progress.imported.chats > 0 && <span>{progress.imported.chats} chats</span>}
@@ -495,12 +634,11 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 </div>
               </div>
             ) : (
-              <p className="text-xs text-[var(--muted-foreground)]">Preparing…</p>
+              <p className="text-xs text-[var(--muted-foreground)]">Preparing...</p>
             )}
           </div>
         )}
 
-        {/* ── Phase: Done ── */}
         {phase === "done" && importResult && (
           <>
             <div
@@ -528,7 +666,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 <StatCard
                   icon={<Users size="0.875rem" />}
                   label="Group Chats"
-                  count={importResult.imported.groupChats ?? 0}
+                  count={importResult.imported.groupChats}
                 />
                 <StatCard icon={<FileText size="0.875rem" />} label="Presets" count={importResult.imported.presets} />
                 <StatCard
@@ -544,7 +682,7 @@ export function STBulkImportModal({ open, onClose }: Props) {
                 <StatCard
                   icon={<UserCircle size="0.875rem" />}
                   label="Personas"
-                  count={importResult.imported.personas ?? 0}
+                  count={importResult.imported.personas}
                 />
               </div>
             )}
@@ -556,9 +694,9 @@ export function STBulkImportModal({ open, onClose }: Props) {
                   {importResult.errors.length} warning{importResult.errors.length !== 1 ? "s" : ""}
                 </div>
                 <div className="max-h-24 overflow-y-auto text-[0.625rem] text-[var(--muted-foreground)]">
-                  {importResult.errors.map((err, i) => (
-                    <div key={i} className="py-0.5">
-                      {err}
+                  {importResult.errors.map((warning, index) => (
+                    <div key={`${warning}-${index}`} className="py-0.5">
+                      {warning}
                     </div>
                   ))}
                 </div>
@@ -578,66 +716,111 @@ export function STBulkImportModal({ open, onClose }: Props) {
   );
 }
 
-// ─── Sub-components ───
-
-function ImportCategory({
+function SelectableImportCategory<T extends ScanItemBase>({
   icon,
   label,
-  count,
   items,
-  checked,
-  onChange,
+  selectedIds,
+  onToggleItem,
+  onSelectAll,
+  onSelectNone,
+  getItemLabel,
+  renderDetails,
+  renderBadge,
 }: {
   icon: React.ReactNode;
   label: string;
-  count: number;
-  items: string[];
-  checked: boolean;
-  onChange: (v: boolean) => void;
+  items: T[];
+  selectedIds: string[];
+  onToggleItem: (itemId: string, checked: boolean) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  getItemLabel?: (item: T) => string;
+  renderDetails?: (item: T) => React.ReactNode;
+  renderBadge?: (item: T) => React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const displayItems = items.slice(0, 20);
-  const remaining = items.length - displayItems.length;
+  const [expanded, setExpanded] = useState(items.length <= 8 && items.length > 0);
+  const selectedSet = new Set(selectedIds);
 
   return (
-    <div className="rounded-lg border border-[var(--border)] transition-colors">
-      <label className="flex cursor-pointer items-center gap-2.5 p-2.5">
-        <input
-          type="checkbox"
-          checked={checked && count > 0}
-          disabled={count === 0}
-          onChange={(e) => onChange(e.target.checked)}
-          className="h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--primary)]"
-        />
-        <span className={cn("text-[var(--muted-foreground)]", count === 0 && "opacity-40")}>{icon}</span>
-        <span className="flex-1 text-xs font-medium">
-          {label} <span className={cn("text-[var(--muted-foreground)]", count === 0 && "opacity-40")}>({count})</span>
-        </span>
-        {count > 0 && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              setExpanded(!expanded);
-            }}
-            className="text-[0.625rem] text-[var(--primary)] hover:underline"
-          >
-            {expanded ? "Hide" : "Show"}
-          </button>
+    <div className="rounded-lg border border-[var(--border)]">
+      <div className="flex items-center gap-2.5 p-2.5">
+        <span className={cn("shrink-0 text-[var(--muted-foreground)]", items.length === 0 && "opacity-40")}>{icon}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium">
+              {label}{" "}
+              <span className={cn("text-[var(--muted-foreground)]", items.length === 0 && "opacity-40")}>
+                ({selectedIds.length}/{items.length})
+              </span>
+            </span>
+          </div>
+        </div>
+        {items.length > 0 && (
+          <>
+            <button
+              type="button"
+              onClick={onSelectAll}
+              className="rounded-md px-2 py-1 text-[0.625rem] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--accent)]"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={onSelectNone}
+              className="rounded-md px-2 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            >
+              None
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpanded((prev) => !prev)}
+              className="rounded-md px-2 py-1 text-[0.625rem] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--accent)]"
+            >
+              {expanded ? "Hide" : "Show"}
+            </button>
+          </>
         )}
-      </label>
-      {expanded && count > 0 && (
-        <div className="border-t border-[var(--border)] px-2.5 py-2 max-h-28 overflow-y-auto">
-          {displayItems.map((name, i) => (
-            <div key={i} className="truncate py-0.5 text-[0.625rem] text-[var(--muted-foreground)]">
-              {name}
-            </div>
-          ))}
-          {remaining > 0 && (
-            <div className="py-0.5 text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-              … and {remaining} more
-            </div>
-          )}
+      </div>
+
+      {expanded && items.length > 0 && (
+        <div className="max-h-60 space-y-1 overflow-y-auto border-t border-[var(--border)] px-2.5 py-2">
+          {items.map((item) => {
+            const checked = selectedSet.has(item.id);
+            return (
+              <label
+                key={item.id}
+                className={cn(
+                  "flex cursor-pointer items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-[var(--secondary)]/70",
+                  checked && "bg-[var(--primary)]/6",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => onToggleItem(item.id, e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--primary)]"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-xs font-medium">{getItemLabel ? getItemLabel(item) : item.name}</span>
+                    {renderBadge?.(item)}
+                    {checked && (
+                      <span className="shrink-0 rounded-full bg-[var(--primary)]/15 px-1.5 py-0.5 text-[0.5625rem] font-medium text-[var(--primary)]">
+                        <span className="inline-flex items-center gap-1">
+                          <Check size="0.5625rem" />
+                          Selected
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                  {renderDetails && (
+                    <div className="truncate text-[0.625rem] text-[var(--muted-foreground)]">{renderDetails(item)}</div>
+                  )}
+                </div>
+              </label>
+            );
+          })}
         </div>
       )}
     </div>

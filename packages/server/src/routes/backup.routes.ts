@@ -13,9 +13,17 @@ import { createThemesStorage } from "../services/storage/themes.storage.js";
 import type { ExportEnvelope } from "@marinara-engine/shared";
 import { getDataDir } from "../utils/data-dir.js";
 import { getDatabaseFilePath } from "../config/runtime-config.js";
+import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
 
 /** Directories inside DATA_DIR that should be included in every backup. */
 const BACKUP_DIRS = ["avatars", "sprites", "backgrounds", "gallery", "fonts", "knowledge-sources"];
+
+function resolveAvatarWritePath(dataDir: string, avatarPath: unknown) {
+  if (typeof avatarPath !== "string" || !avatarPath.trim()) return null;
+  const filename = avatarPath.split("/").filter(Boolean).pop();
+  if (!filename) return null;
+  return join(dataDir, "avatars", filename);
+}
 
 export async function backupRoutes(app: FastifyInstance) {
   // Create a full backup folder
@@ -199,14 +207,21 @@ export async function backupRoutes(app: FastifyInstance) {
       for (const c of data.characters) {
         try {
           const charData = typeof c.data === "string" ? JSON.parse(c.data) : c.data;
-          const result = await chars.create(charData, c.avatarPath ?? undefined);
+          const result = await chars.create(
+            charData,
+            c.avatarPath ?? undefined,
+            normalizeTimestampOverrides({ createdAt: c.createdAt, updatedAt: c.updatedAt }),
+          );
           // Restore avatar from base64 if provided
           if (c.avatarBase64 && result?.avatarPath) {
             const dataDir = getDataDir();
             const avatarDir = join(dataDir, "avatars");
             await mkdir(avatarDir, { recursive: true });
             const { writeFile } = await import("fs/promises");
-            await writeFile(join(dataDir, result.avatarPath), Buffer.from(c.avatarBase64, "base64"));
+            const avatarFile = resolveAvatarWritePath(dataDir, result.avatarPath);
+            if (avatarFile) {
+              await writeFile(avatarFile, Buffer.from(c.avatarBase64, "base64"));
+            }
           }
           stats.characters++;
         } catch {
@@ -243,7 +258,7 @@ export async function backupRoutes(app: FastifyInstance) {
             personaStats: p.personaStats,
             altDescriptions:
               typeof p.altDescriptions === "string" ? p.altDescriptions : JSON.stringify(p.altDescriptions ?? []),
-          });
+          }, normalizeTimestampOverrides({ createdAt: p.createdAt, updatedAt: p.updatedAt }));
           stats.personas++;
         } catch {
           /* skip */
@@ -255,16 +270,19 @@ export async function backupRoutes(app: FastifyInstance) {
     if (Array.isArray(data.lorebooks)) {
       for (const lb of data.lorebooks) {
         try {
-          const created = await lbs.create({
-            name: lb.name,
-            description: lb.description ?? "",
-            category: lb.category ?? "uncategorized",
-            scanDepth: lb.scanDepth,
-            tokenBudget: lb.tokenBudget,
-            recursiveScanning: lb.recursiveScanning,
-            maxRecursionDepth: lb.maxRecursionDepth,
-            enabled: lb.enabled ?? true,
-          });
+          const created = await lbs.create(
+            {
+              name: lb.name,
+              description: lb.description ?? "",
+              category: lb.category ?? "uncategorized",
+              scanDepth: lb.scanDepth,
+              tokenBudget: lb.tokenBudget,
+              recursiveScanning: lb.recursiveScanning,
+              maxRecursionDepth: lb.maxRecursionDepth,
+              enabled: lb.enabled ?? true,
+            },
+            normalizeTimestampOverrides({ createdAt: lb.createdAt, updatedAt: lb.updatedAt }),
+          );
           if (created && Array.isArray(lb.entries)) {
             for (const entry of lb.entries) {
               await lbs.createEntry({ ...entry, lorebookId: (created as any).id });
@@ -283,16 +301,19 @@ export async function backupRoutes(app: FastifyInstance) {
         try {
           const existing = await presets.getById(p.id);
           if (!existing) {
-            const created = await presets.create({
-              name: `${p.name} (imported)`,
-              description: p.description ?? "",
-              parameters:
-                typeof p.parameters === "string" ? JSON.parse(p.parameters) : (p.parameters ?? p.generationParams),
-              variableGroups:
-                typeof p.variableGroups === "string" ? JSON.parse(p.variableGroups) : (p.variableGroups ?? []),
-              variableValues:
-                typeof p.variableValues === "string" ? JSON.parse(p.variableValues) : (p.variableValues ?? {}),
-            });
+            const created = await presets.create(
+              {
+                name: `${p.name} (imported)`,
+                description: p.description ?? "",
+                parameters:
+                  typeof p.parameters === "string" ? JSON.parse(p.parameters) : (p.parameters ?? p.generationParams),
+                variableGroups:
+                  typeof p.variableGroups === "string" ? JSON.parse(p.variableGroups) : (p.variableGroups ?? []),
+                variableValues:
+                  typeof p.variableValues === "string" ? JSON.parse(p.variableValues) : (p.variableValues ?? {}),
+              },
+              normalizeTimestampOverrides({ createdAt: p.createdAt, updatedAt: p.updatedAt }),
+            );
             if (created) {
               const newPresetId = (created as any).id;
               // Map old group IDs → new group IDs for section groupId references

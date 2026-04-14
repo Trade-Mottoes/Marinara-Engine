@@ -5,6 +5,7 @@ import type { DB } from "../../db/connection.js";
 import type { MarkerConfig } from "@marinara-engine/shared";
 import { createPromptsStorage } from "../storage/prompts.storage.js";
 import type { PromptVariableGroup } from "@marinara-engine/shared";
+import type { TimestampOverrides } from "./import-timestamps.js";
 
 const VALID_REASONING = new Set(["low", "medium", "high", "maximum"]);
 
@@ -64,7 +65,12 @@ interface STPreset {
  * Import a SillyTavern prompt preset JSON.
  * Parses the prompt array, variable toggle groups, and generation parameters.
  */
-export async function importSTPreset(raw: Record<string, unknown>, db: DB, fileName?: string) {
+export async function importSTPreset(
+  raw: Record<string, unknown>,
+  db: DB,
+  fileName?: string,
+  options?: { timestampOverrides?: TimestampOverrides | null },
+) {
   const storage = createPromptsStorage(db);
   const preset = raw as unknown as STPreset;
 
@@ -72,30 +78,33 @@ export async function importSTPreset(raw: Record<string, unknown>, db: DB, fileN
   const variableGroups = detectVariableGroups(preset.prompts ?? []);
 
   // Create the preset
-  const created = await storage.create({
-    name: `Imported: ${guessPresetName(raw, fileName)}`,
-    description: "Imported from SillyTavern",
-    variableGroups,
-    variableValues: {},
-    parameters: {
-      temperature: clamp(preset.temperature ?? 1, 0, 2),
-      topP: clamp(preset.top_p ?? 1, 0, 1),
-      topK: Math.max(0, Math.round(preset.top_k ?? 0)),
-      minP: clamp(preset.min_p ?? 0, 0, 1),
-      maxTokens: Math.max(1, Math.round(preset.openai_max_tokens ?? 4096)),
-      maxContext: Math.max(1, Math.round(preset.openai_max_context ?? 128000)),
-      frequencyPenalty: clamp(preset.frequency_penalty ?? 0, -2, 2),
-      presencePenalty: clamp(preset.presence_penalty ?? 0, -2, 2),
-      reasoningEffort: toReasoningEffort(preset.reasoning_effort),
-      verbosity: null,
-      squashSystemMessages: preset.squash_system_messages ?? true,
-      showThoughts: preset.show_thoughts ?? true,
-      useMaxContext: false,
-      stopSequences: [],
-      strictRoleFormatting: true,
-      singleUserMessage: false,
+  const created = await storage.create(
+    {
+      name: `Imported: ${guessPresetName(raw, fileName)}`,
+      description: "Imported from SillyTavern",
+      variableGroups,
+      variableValues: {},
+      parameters: {
+        temperature: clamp(preset.temperature ?? 1, 0, 2),
+        topP: clamp(preset.top_p ?? 1, 0, 1),
+        topK: Math.max(0, Math.round(preset.top_k ?? 0)),
+        minP: clamp(preset.min_p ?? 0, 0, 1),
+        maxTokens: Math.max(1, Math.round(preset.openai_max_tokens ?? 4096)),
+        maxContext: Math.max(1, Math.round(preset.openai_max_context ?? 128000)),
+        frequencyPenalty: clamp(preset.frequency_penalty ?? 0, -2, 2),
+        presencePenalty: clamp(preset.presence_penalty ?? 0, -2, 2),
+        reasoningEffort: toReasoningEffort(preset.reasoning_effort),
+        verbosity: null,
+        squashSystemMessages: preset.squash_system_messages ?? true,
+        showThoughts: preset.show_thoughts ?? true,
+        useMaxContext: false,
+        stopSequences: [],
+        strictRoleFormatting: true,
+        singleUserMessage: false,
+      },
     },
-  });
+    options?.timestampOverrides,
+  );
 
   if (!created) return { error: "Failed to create preset" };
 

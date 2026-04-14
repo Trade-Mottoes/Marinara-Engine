@@ -43,8 +43,34 @@ import { cn, getAvatarCropStyle } from "../../lib/utils";
 
 type CharacterRow = { id: string; data: string; avatarPath: string | null; createdAt: string; updatedAt: string };
 type GroupRow = { id: string; name: string; description: string; characterIds: string; avatarPath: string | null };
+type ParsedCharacterRow = CharacterRow & { parsed: Record<string, any> };
 
 type SortOption = "name-asc" | "name-desc" | "newest" | "oldest" | "favorites";
+
+function getCharacterPreviewMetadata(char: ParsedCharacterRow) {
+  const parts: string[] = [];
+  const creator = typeof char.parsed.creator === "string" ? char.parsed.creator.trim() : "";
+  const version = typeof char.parsed.character_version === "string" ? char.parsed.character_version.trim() : "";
+  const importMetadata =
+    char.parsed.extensions?.importMetadata && typeof char.parsed.extensions.importMetadata === "object"
+      ? (char.parsed.extensions.importMetadata as Record<string, unknown>)
+      : {};
+  const cardMetadata =
+    importMetadata.card && typeof importMetadata.card === "object"
+      ? (importMetadata.card as Record<string, unknown>)
+      : {};
+  const spec = typeof cardMetadata.spec === "string" ? cardMetadata.spec.trim() : "";
+  const specVersion = typeof cardMetadata.specVersion === "string" ? cardMetadata.specVersion.trim() : "";
+  const tags = Array.isArray(char.parsed.tags) ? (char.parsed.tags as string[]).filter(Boolean) : [];
+
+  if (creator) parts.push(`by ${creator}`);
+  if (version) parts.push(`v${version}`);
+  if (spec) parts.push(spec);
+  if (specVersion) parts.push(`spec ${specVersion}`);
+  if (parts.length > 0) return parts.join(" · ");
+  if (tags.length > 0) return tags.slice(0, 3).join(" · ");
+  return "No creator or card metadata";
+}
 
 export function CharactersPanel() {
   const { data: characters, isLoading } = useCharacters();
@@ -80,6 +106,9 @@ export function CharactersPanel() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const [favFilter, setFavFilter] = useState<"all" | "favorites" | "non-favorites">("all");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedCharacterIds, setSelectedCharacterIds] = useState<Set<string>>(new Set());
+  const [exportingSelected, setExportingSelected] = useState(false);
 
   const chatCharacterIds: string[] = activeChat
     ? ((typeof activeChat.characterIds === "string" ? JSON.parse(activeChat.characterIds) : activeChat.characterIds) ??
@@ -99,7 +128,7 @@ export function CharactersPanel() {
         return { ...char, parsed: { name: "Unknown", description: "" } };
       }
     });
-  }, [characters]);
+  }, [characters]) as ParsedCharacterRow[];
 
   const charMap = useMemo(() => {
     const map = new Map<string, { name: string; avatarPath: string | null }>();
@@ -290,6 +319,41 @@ export function CharactersPanel() {
     [updateGroup],
   );
 
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedCharacterIds(new Set());
+  }, []);
+
+  const toggleSelection = useCallback((characterId: string) => {
+    setSelectedCharacterIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(characterId)) next.delete(characterId);
+      else next.add(characterId);
+      return next;
+    });
+  }, []);
+
+  const selectAllVisible = useCallback(() => {
+    setSelectedCharacterIds(new Set(sortedCharacters.map((char) => char.id)));
+  }, [sortedCharacters]);
+
+  const handleExportSelected = useCallback(async () => {
+    if (selectedCharacterIds.size === 0) return;
+    setExportingSelected(true);
+    try {
+      await api.downloadPost(
+        "/characters/export-bulk",
+        { ids: [...selectedCharacterIds] },
+        "marinara-characters.zip",
+      );
+      toast.success(`Exported ${selectedCharacterIds.size} character${selectedCharacterIds.size === 1 ? "" : "s"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to export characters");
+    } finally {
+      setExportingSelected(false);
+    }
+  }, [selectedCharacterIds]);
+
   return (
     <div className="flex flex-col gap-2 p-3">
       {/* Search + Sort */}
@@ -431,7 +495,62 @@ export function CharactersPanel() {
         >
           <Sparkles size="0.75rem" />
         </button>
+        <button
+          onClick={() => {
+            if (selectionMode) {
+              exitSelectionMode();
+            } else {
+              setAssigningToGroup(null);
+              setSelectionMode(true);
+            }
+          }}
+          className={cn(
+            "flex items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
+            selectionMode
+              ? "bg-[var(--primary)]/15 text-[var(--primary)] ring-1 ring-[var(--primary)]/30"
+              : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
+          )}
+        >
+          <Check size="0.75rem" />
+          Select
+        </button>
       </div>
+
+      {selectionMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-2">
+          <span className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+            {selectedCharacterIds.size} selected
+          </span>
+          <button
+            onClick={selectAllVisible}
+            disabled={sortedCharacters.length === 0}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+          >
+            Select visible
+          </button>
+          <button
+            onClick={() => setSelectedCharacterIds(new Set())}
+            disabled={selectedCharacterIds.size === 0}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <button
+            onClick={handleExportSelected}
+            disabled={selectedCharacterIds.size === 0 || exportingSelected}
+            className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[0.625rem] font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90 disabled:opacity-40"
+          >
+            <Download size="0.6875rem" />
+            {exportingSelected ? "Exporting..." : "Export ZIP"}
+          </button>
+          <button
+            onClick={exitSelectionMode}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+          >
+            Done
+          </button>
+        </div>
+      )}
 
       {/* ── Groups Section ── */}
       <div className="mt-1">
@@ -548,6 +667,9 @@ export function CharactersPanel() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (!isAssigning) {
+                            exitSelectionMode();
+                          }
                           setAssigningToGroup(isAssigning ? null : group.id);
                         }}
                         className={cn(
@@ -658,6 +780,7 @@ export function CharactersPanel() {
       <div className="flex items-center gap-1.5 px-1 pt-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
         <User size="0.6875rem" />
         Characters ({filteredCharacters.length})
+        {selectionMode && <span className="text-[0.625rem] font-normal normal-case">· {selectedCharacterIds.size} selected</span>}
       </div>
 
       {/* Character list */}
@@ -681,20 +804,23 @@ export function CharactersPanel() {
       <div className="stagger-children flex flex-col gap-1">
         {sortedCharacters.map((char) => {
           const charName = char.parsed.name ?? "Unnamed";
-          const charDesc = char.parsed.description ?? "";
           const charTags = (char.parsed.tags ?? []) as string[];
           const charNameColor = (char.parsed.extensions?.nameColor as string) || undefined;
           const isSelected = chatCharacterIds.includes(char.id);
+          const isBulkSelected = selectedCharacterIds.has(char.id);
           const avatarUrl = char.avatarPath;
           // If assigning to a group, highlight members of that group
           const targetGroup = assigningToGroup ? parsedGroups.find((g) => g.id === assigningToGroup) : null;
           const isInTargetGroup = targetGroup?.memberIds.includes(char.id) ?? false;
+          const previewMetadata = getCharacterPreviewMetadata(char);
 
           return (
             <div
               key={char.id}
               onClick={() => {
-                if (assigningToGroup && targetGroup) {
+                if (selectionMode) {
+                  toggleSelection(char.id);
+                } else if (assigningToGroup && targetGroup) {
                   toggleGroupMember(assigningToGroup, char.id, targetGroup.memberIds);
                 } else {
                   openCharacterDetail(char.id);
@@ -702,11 +828,30 @@ export function CharactersPanel() {
               }}
               className={cn(
                 "group flex items-center gap-2.5 rounded-xl p-2 transition-all hover:bg-[var(--sidebar-accent)] cursor-pointer",
+                selectionMode && isBulkSelected && "ring-1 ring-[var(--primary)]/40 bg-[var(--primary)]/8",
                 isSelected && !assigningToGroup && "ring-1 ring-[var(--primary)]/40 bg-[var(--primary)]/5",
                 assigningToGroup && isInTargetGroup && "ring-1 ring-violet-500/50 bg-violet-500/10",
                 assigningToGroup && !isInTargetGroup && "opacity-60 hover:opacity-100",
               )}
             >
+              {selectionMode && (
+                <button
+                  type="button"
+                  aria-label={isBulkSelected ? "Deselect character" : "Select character"}
+                  className={cn(
+                    "flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-colors",
+                    isBulkSelected
+                      ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                      : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)] text-transparent",
+                  )}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelection(char.id);
+                  }}
+                >
+                  <Check size="0.75rem" />
+                </button>
+              )}
               {/* Avatar */}
               <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 text-white shadow-sm">
                 {avatarUrl ? (
@@ -761,7 +906,7 @@ export function CharactersPanel() {
                     ? isInTargetGroup
                       ? "In group — click to remove"
                       : "Click to add to group"
-                    : charDesc.slice(0, 60) || "No description"}
+                    : previewMetadata}
                 </div>
                 {!assigningToGroup && charTags.length > 0 && (
                   <div className="mt-0.5 flex flex-wrap gap-0.5">
@@ -787,7 +932,7 @@ export function CharactersPanel() {
               </div>
 
               {/* Actions (hidden during group assign mode) */}
-              {!assigningToGroup && (
+              {!assigningToGroup && !selectionMode && (
                 <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-all group-hover:opacity-100 max-md:opacity-100">
                   {activeChat && (
                     <button
@@ -824,7 +969,7 @@ export function CharactersPanel() {
         })}
       </div>
 
-      {activeChat && !assigningToGroup && (
+      {activeChat && !assigningToGroup && !selectionMode && (
         <p className="px-1 text-[0.625rem] text-[var(--muted-foreground)]/60">
           Click to edit · Use ✓ to assign/remove from chat
         </p>

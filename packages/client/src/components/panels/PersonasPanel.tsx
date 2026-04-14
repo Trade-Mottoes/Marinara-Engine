@@ -34,12 +34,14 @@ import {
   ChevronRight,
   Users,
   X,
+  Check,
   UserPlus,
   UserMinus,
   Tag,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { HelpTooltip } from "../ui/HelpTooltip";
+import { api } from "../../lib/api-client";
 
 type PersonaRow = {
   id: string;
@@ -86,6 +88,9 @@ export function PersonasPanel() {
   const [favFilter, setFavFilter] = useState<"all" | "active" | "inactive">("all");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [tagsExpanded, setTagsExpanded] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPersonaIds, setSelectedPersonaIds] = useState<Set<string>>(new Set());
+  const [exportingSelected, setExportingSelected] = useState(false);
 
   // Groups state
   const [groupsExpanded, setGroupsExpanded] = useState(true);
@@ -254,6 +259,37 @@ export function PersonasPanel() {
     }
   }, [filteredList, sort]);
 
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedPersonaIds(new Set());
+  }, []);
+
+  const toggleSelection = useCallback((personaId: string) => {
+    setSelectedPersonaIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(personaId)) next.delete(personaId);
+      else next.add(personaId);
+      return next;
+    });
+  }, []);
+
+  const handleExportSelected = useCallback(async () => {
+    if (selectedPersonaIds.size === 0) return;
+    setExportingSelected(true);
+    try {
+      await api.downloadPost(
+        "/characters/personas/export-bulk",
+        { ids: [...selectedPersonaIds] },
+        "marinara-personas.zip",
+      );
+      toast.success(`Exported ${selectedPersonaIds.size} persona${selectedPersonaIds.size === 1 ? "" : "s"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to export personas");
+    } finally {
+      setExportingSelected(false);
+    }
+  }, [selectedPersonaIds]);
+
   return (
     <div className="flex flex-col gap-2 p-3">
       {/* Header help */}
@@ -403,7 +439,61 @@ export function PersonasPanel() {
         >
           <Sparkles size="0.75rem" />
         </button>
+        <button
+          onClick={() => {
+            if (selectionMode) exitSelectionMode();
+            else {
+              setAssigningToGroup(null);
+              setSelectionMode(true);
+            }
+          }}
+          className={cn(
+            "flex items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
+            selectionMode
+              ? "bg-emerald-400/15 text-emerald-400 ring-1 ring-emerald-400/30"
+              : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
+          )}
+        >
+          <Download size="0.75rem" />
+          Select
+        </button>
       </div>
+
+      {selectionMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-2">
+          <span className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+            {selectedPersonaIds.size} selected
+          </span>
+          <button
+            onClick={() => setSelectedPersonaIds(new Set(list.map((persona) => persona.id)))}
+            disabled={list.length === 0}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-emerald-400 transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+          >
+            Select visible
+          </button>
+          <button
+            onClick={() => setSelectedPersonaIds(new Set())}
+            disabled={selectedPersonaIds.size === 0}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <button
+            onClick={handleExportSelected}
+            disabled={selectedPersonaIds.size === 0 || exportingSelected}
+            className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-2.5 py-1 text-[0.625rem] font-medium text-white transition-all hover:opacity-90 disabled:opacity-40"
+          >
+            <Download size="0.6875rem" />
+            {exportingSelected ? "Exporting..." : "Export ZIP"}
+          </button>
+          <button
+            onClick={exitSelectionMode}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+          >
+            Done
+          </button>
+        </div>
+      )}
 
       {/* Hidden file input for avatar uploads */}
       <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
@@ -505,6 +595,7 @@ export function PersonasPanel() {
                     <div className="flex items-center gap-0.5">
                       <button
                         onClick={() => {
+                          if (assigningToGroup !== group.id) exitSelectionMode();
                           setAssigningToGroup(assigningToGroup === group.id ? null : group.id);
                         }}
                         className={cn(
@@ -623,6 +714,7 @@ export function PersonasPanel() {
       <div className="stagger-children flex flex-col gap-1">
         {list.map((persona) => {
           const active = isActive(persona);
+          const isBulkSelected = selectedPersonaIds.has(persona.id);
           const targetGroup = assigningToGroup ? parsedGroups.find((g) => g.id === assigningToGroup) : null;
           const isInTargetGroup = targetGroup ? targetGroup.memberIds.includes(persona.id) : false;
 
@@ -631,18 +723,39 @@ export function PersonasPanel() {
               key={persona.id}
               className={cn(
                 "group flex items-center gap-3 rounded-xl p-2.5 transition-all hover:bg-[var(--sidebar-accent)] cursor-pointer",
+                selectionMode && isBulkSelected && "ring-1 ring-emerald-400/40 bg-emerald-400/8",
                 active && "ring-1 ring-emerald-400/40 bg-emerald-400/5",
                 assigningToGroup && isInTargetGroup && "ring-1 ring-violet-500/50 bg-violet-500/10",
                 assigningToGroup && !isInTargetGroup && "opacity-60 hover:opacity-100",
               )}
               onClick={() => {
-                if (assigningToGroup && targetGroup) {
+                if (selectionMode) {
+                  toggleSelection(persona.id);
+                } else if (assigningToGroup && targetGroup) {
                   toggleGroupMember(assigningToGroup, persona.id, targetGroup.memberIds);
                 } else {
                   openPersonaDetail(persona.id);
                 }
               }}
             >
+              {selectionMode && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelection(persona.id);
+                  }}
+                  className={cn(
+                    "flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-colors",
+                    isBulkSelected
+                      ? "border-emerald-400 bg-emerald-400 text-white"
+                      : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)] text-transparent",
+                  )}
+                  aria-label={isBulkSelected ? "Deselect persona" : "Select persona"}
+                >
+                  <Check size="0.75rem" />
+                </button>
+              )}
               {/* Avatar */}
               <button
                 onClick={(e) => handleAvatarClick(e, persona.id)}
@@ -687,7 +800,8 @@ export function PersonasPanel() {
               </div>
 
               {/* Actions */}
-              <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100">
+              {!selectionMode && (
+                <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 max-md:opacity-100">
                 {!active && (
                   <button
                     onClick={(e) => {
@@ -722,6 +836,7 @@ export function PersonasPanel() {
                   <Trash2 size="0.8125rem" />
                 </button>
               </div>
+              )}
             </div>
           );
         })}

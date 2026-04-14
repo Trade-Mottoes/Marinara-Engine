@@ -17,6 +17,13 @@ import { createPromptsStorage } from "../services/storage/prompts.storage.js";
 import { assemblePrompt, type AssemblerInput } from "../services/prompt/index.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
+import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
+import AdmZip from "adm-zip";
+
+function toSafeExportName(name: string, fallback: string) {
+  const sanitized = name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
+  return sanitized || fallback;
+}
 
 export async function promptsRoutes(app: FastifyInstance) {
   const storage = createPromptsStorage(app.db);
@@ -53,7 +60,14 @@ export async function promptsRoutes(app: FastifyInstance) {
 
   app.post("/", async (req) => {
     const input = createPromptPresetSchema.parse(req.body);
-    return storage.create(input);
+    const body = req.body as Record<string, unknown>;
+    return storage.create(
+      input,
+      normalizeTimestampOverrides({
+        createdAt: body.createdAt,
+        updatedAt: body.updatedAt,
+      }),
+    );
   });
 
   app.patch<{ Params: { id: string } }>("/:id", async (req) => {
@@ -101,6 +115,45 @@ export async function promptsRoutes(app: FastifyInstance) {
         `attachment; filename="${encodeURIComponent(preset.name || "preset")}.marinara.json"`,
       )
       .send(envelope);
+  });
+
+  app.post("/export-bulk", async (req, reply) => {
+    const { ids } = req.body as { ids?: string[] };
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.status(400).send({ error: "ids array is required" });
+    }
+
+    const zip = new AdmZip();
+    let exportedCount = 0;
+    for (const id of ids) {
+      const preset = await storage.getById(id);
+      if (!preset) continue;
+      const [sections, groups, choiceBlocks] = await Promise.all([
+        storage.listSections(id),
+        storage.listGroups(id),
+        storage.listChoiceBlocksForPreset(id),
+      ]);
+      const envelope: ExportEnvelope = {
+        type: "marinara_preset",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data: { preset, sections, groups, choiceBlocks },
+      };
+      zip.addFile(
+        `${toSafeExportName(preset.name || "preset", `preset-${exportedCount + 1}`)}.marinara.json`,
+        Buffer.from(JSON.stringify(envelope, null, 2), "utf-8"),
+      );
+      exportedCount++;
+    }
+
+    if (exportedCount === 0) {
+      return reply.status(404).send({ error: "No presets found for the provided ids" });
+    }
+
+    return reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", 'attachment; filename="marinara-presets.zip"')
+      .send(zip.toBuffer());
   });
 
   // ═══════════════════════════════════════════

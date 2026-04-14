@@ -17,6 +17,14 @@ import { writeFile, mkdir, readFile } from "fs/promises";
 import { join } from "path";
 import { DATA_DIR } from "../utils/data-dir.js";
 import { existsSync } from "fs";
+import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
+import { importSTLorebook } from "../services/import/st-lorebook.importer.js";
+import AdmZip from "adm-zip";
+
+function toSafeExportName(name: string, fallback: string) {
+  const sanitized = name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
+  return sanitized || fallback;
+}
 
 export async function charactersRoutes(app: FastifyInstance) {
   const storage = createCharactersStorage(app.db);
@@ -37,7 +45,14 @@ export async function charactersRoutes(app: FastifyInstance) {
     const input = createCharacterSchema.parse(req.body);
     const body = req.body as Record<string, unknown>;
     const avatarPath = typeof body.avatarPath === "string" ? body.avatarPath : undefined;
-    return storage.create(input.data, avatarPath);
+    return storage.create(
+      input.data,
+      avatarPath,
+      normalizeTimestampOverrides({
+        createdAt: body.createdAt,
+        updatedAt: body.updatedAt,
+      }),
+    );
   });
 
   app.patch<{ Params: { id: string } }>("/:id", async (req) => {
@@ -65,7 +80,15 @@ export async function charactersRoutes(app: FastifyInstance) {
       type: "marinara_character",
       version: 1,
       exportedAt: new Date().toISOString(),
-      data: { spec: "chara_card_v2", spec_version: "2.0", data: charData },
+      data: {
+        spec: "chara_card_v2",
+        spec_version: "2.0",
+        data: charData,
+        metadata: {
+          createdAt: char.createdAt,
+          updatedAt: char.updatedAt,
+        },
+      },
     };
     return reply
       .header(
@@ -73,6 +96,113 @@ export async function charactersRoutes(app: FastifyInstance) {
         `attachment; filename="${encodeURIComponent(charData.name || "character")}.marinara.json"`,
       )
       .send(envelope);
+  });
+
+  app.post("/export-bulk", async (req, reply) => {
+    const { ids } = req.body as { ids?: string[] };
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.status(400).send({ error: "ids array is required" });
+    }
+
+    const zip = new AdmZip();
+    let exportedCount = 0;
+    for (const id of ids) {
+      const char = await storage.getById(id);
+      if (!char) continue;
+      const charData = JSON.parse(char.data);
+      const envelope: ExportEnvelope = {
+        type: "marinara_character",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data: {
+          spec: "chara_card_v2",
+          spec_version: "2.0",
+          data: charData,
+          metadata: {
+            createdAt: char.createdAt,
+            updatedAt: char.updatedAt,
+          },
+        },
+      };
+      zip.addFile(
+        `${toSafeExportName(String(charData.name ?? "character"), `character-${exportedCount + 1}`)}.marinara.json`,
+        Buffer.from(JSON.stringify(envelope, null, 2), "utf-8"),
+      );
+      exportedCount++;
+    }
+
+    if (exportedCount === 0) {
+      return reply.status(404).send({ error: "No characters found for the provided ids" });
+    }
+
+    return reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", 'attachment; filename="marinara-characters.zip"')
+      .send(zip.toBuffer());
+  });
+
+  app.post<{ Params: { id: string } }>("/:id/embedded-lorebook/import", async (req, reply) => {
+    const char = await storage.getById(req.params.id);
+    if (!char) return reply.status(404).send({ error: "Character not found" });
+
+    const charData = JSON.parse(char.data) as Record<string, unknown>;
+    const book = charData.character_book as { entries?: unknown[] } | null | undefined;
+    const entries = Array.isArray(book?.entries) ? book.entries : [];
+    if (entries.length === 0) {
+      return reply.status(400).send({ error: "Character does not have an embedded lorebook" });
+    }
+
+    const extensions =
+      charData.extensions && typeof charData.extensions === "object"
+        ? ({ ...(charData.extensions as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    const importMetadata =
+      extensions.importMetadata && typeof extensions.importMetadata === "object"
+        ? ({ ...(extensions.importMetadata as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+    const embeddedLorebookMetadata =
+      importMetadata.embeddedLorebook && typeof importMetadata.embeddedLorebook === "object"
+        ? ({ ...(importMetadata.embeddedLorebook as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+
+    const result = await importSTLorebook(
+      {
+        name: String(charData.name ?? "Character Lorebook"),
+        entries: book?.entries ?? [],
+        extensions: (book as Record<string, unknown> | null | undefined)?.extensions ?? {},
+      },
+      app.db,
+      {
+        characterId: req.params.id,
+        namePrefix: String(charData.name ?? "Character"),
+        existingLorebookId:
+          typeof embeddedLorebookMetadata.lorebookId === "string" ? embeddedLorebookMetadata.lorebookId : null,
+      },
+    );
+
+    if (!result || "error" in result) {
+      return reply.status(500).send({ error: result?.error ?? "Failed to import embedded lorebook" });
+    }
+
+    extensions.importMetadata = {
+      ...importMetadata,
+      embeddedLorebook: {
+        ...embeddedLorebookMetadata,
+        hasEmbeddedLorebook: true,
+        lorebookId: result.lorebookId,
+      },
+    };
+
+    await storage.update(req.params.id, {
+      extensions: extensions as any,
+    });
+
+    return {
+      success: true,
+      lorebookId: result.lorebookId,
+      entriesImported: result.entriesImported,
+      reimported: result.reimported ?? false,
+    };
   });
 
   // ── Export as PNG ──
@@ -156,7 +286,7 @@ export async function charactersRoutes(app: FastifyInstance) {
   });
 
   app.post("/personas", async (req) => {
-    const { name, description, ...extra } = req.body as {
+    const { name, description, createdAt, updatedAt, ...extra } = req.body as {
       name: string;
       description?: string;
       personality?: string;
@@ -166,8 +296,16 @@ export async function charactersRoutes(app: FastifyInstance) {
       nameColor?: string;
       dialogueColor?: string;
       boxColor?: string;
+      createdAt?: string;
+      updatedAt?: string;
     };
-    return storage.createPersona(name, description ?? "", undefined, extra);
+    return storage.createPersona(
+      name,
+      description ?? "",
+      undefined,
+      extra,
+      normalizeTimestampOverrides({ createdAt, updatedAt }),
+    );
   });
 
   app.patch<{ Params: { id: string } }>("/personas/:id", async (req) => {
@@ -216,7 +354,13 @@ export async function charactersRoutes(app: FastifyInstance) {
       type: "marinara_persona",
       version: 1,
       exportedAt: new Date().toISOString(),
-      data: personaData,
+      data: {
+        ...personaData,
+        metadata: {
+          createdAt: persona.createdAt,
+          updatedAt: persona.updatedAt,
+        },
+      },
     };
     return reply
       .header(
@@ -224,6 +368,54 @@ export async function charactersRoutes(app: FastifyInstance) {
         `attachment; filename="${encodeURIComponent(String(persona.name || "persona"))}.marinara.json"`,
       )
       .send(envelope);
+  });
+
+  app.post("/personas/export-bulk", async (req, reply) => {
+    const { ids } = req.body as { ids?: string[] };
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.status(400).send({ error: "ids array is required" });
+    }
+
+    const zip = new AdmZip();
+    let exportedCount = 0;
+    for (const id of ids) {
+      const persona = await storage.getPersona(id);
+      if (!persona) continue;
+      const {
+        id: _id,
+        createdAt: _createdAt,
+        updatedAt: _updatedAt,
+        avatarPath: _avatarPath,
+        isActive: _isActive,
+        ...personaData
+      } = persona as Record<string, unknown>;
+      const envelope: ExportEnvelope = {
+        type: "marinara_persona",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data: {
+          ...personaData,
+          metadata: {
+            createdAt: persona.createdAt,
+            updatedAt: persona.updatedAt,
+          },
+        },
+      };
+      zip.addFile(
+        `${toSafeExportName(String(persona.name ?? "persona"), `persona-${exportedCount + 1}`)}.marinara.json`,
+        Buffer.from(JSON.stringify(envelope, null, 2), "utf-8"),
+      );
+      exportedCount++;
+    }
+
+    if (exportedCount === 0) {
+      return reply.status(404).send({ error: "No personas found for the provided ids" });
+    }
+
+    return reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", 'attachment; filename="marinara-personas.zip"')
+      .send(zip.toBuffer());
   });
 
   // ── Character Groups ──

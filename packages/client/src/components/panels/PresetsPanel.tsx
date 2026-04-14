@@ -2,10 +2,12 @@
 // Panel: Presets (overhauled — search, assign, edit, duplicate)
 // ──────────────────────────────────────────────
 import { useState, useMemo } from "react";
+import { toast } from "sonner";
 import { usePresets, useDeletePreset, useDuplicatePreset, useSetDefaultPreset } from "../../hooks/use-presets";
 import { useUpdateChat, useUpdateChatMetadata } from "../../hooks/use-chats";
 import { useChatStore } from "../../stores/chat.store";
 import { useUIStore } from "../../stores/ui.store";
+import { api } from "../../lib/api-client";
 import { ChoiceSelectionModal } from "../presets/ChoiceSelectionModal";
 import { Plus, Download, FileText, Trash2, Check, Copy, Search, Code2, Hash, Star } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -32,6 +34,9 @@ export function PresetsPanel() {
   const updateMetadata = useUpdateChatMetadata();
   const [search, setSearch] = useState("");
   const [choiceModalPresetId, setChoiceModalPresetId] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPresetIds, setSelectedPresetIds] = useState<Set<string>>(new Set());
+  const [exportingSelected, setExportingSelected] = useState(false);
 
   const activePresetId = activeChat?.promptPresetId ?? null;
 
@@ -73,6 +78,33 @@ export function PresetsPanel() {
     }
   };
 
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedPresetIds(new Set());
+  };
+
+  const toggleSelection = (presetId: string) => {
+    setSelectedPresetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(presetId)) next.delete(presetId);
+      else next.add(presetId);
+      return next;
+    });
+  };
+
+  const handleExportSelected = async () => {
+    if (selectedPresetIds.size === 0) return;
+    setExportingSelected(true);
+    try {
+      await api.downloadPost("/prompts/export-bulk", { ids: [...selectedPresetIds] }, "marinara-presets.zip");
+      toast.success(`Exported ${selectedPresetIds.size} preset${selectedPresetIds.size === 1 ? "" : "s"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to export presets");
+    } finally {
+      setExportingSelected(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-2 p-3">
       {/* Action buttons */}
@@ -89,7 +121,57 @@ export function PresetsPanel() {
         >
           <Download size="0.8125rem" /> Import
         </button>
+        <button
+          onClick={() => {
+            if (selectionMode) exitSelectionMode();
+            else setSelectionMode(true);
+          }}
+          className={cn(
+            "flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-medium transition-all",
+            selectionMode
+              ? "bg-purple-400/15 text-purple-400 ring-1 ring-purple-400/30"
+              : "bg-[var(--secondary)] text-[var(--secondary-foreground)] ring-1 ring-[var(--border)] hover:bg-[var(--accent)]",
+          )}
+        >
+          <Check size="0.8125rem" /> Select
+        </button>
       </div>
+
+      {selectionMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--secondary)]/60 px-3 py-2">
+          <span className="text-[0.6875rem] font-medium text-[var(--muted-foreground)]">
+            {selectedPresetIds.size} selected
+          </span>
+          <button
+            onClick={() => setSelectedPresetIds(new Set(filteredPresets.map((preset) => preset.id)))}
+            disabled={filteredPresets.length === 0}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-purple-400 transition-colors hover:bg-[var(--accent)] disabled:opacity-40"
+          >
+            Select visible
+          </button>
+          <button
+            onClick={() => setSelectedPresetIds(new Set())}
+            disabled={selectedPresetIds.size === 0}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <button
+            onClick={handleExportSelected}
+            disabled={selectedPresetIds.size === 0 || exportingSelected}
+            className="inline-flex items-center gap-1 rounded-lg bg-purple-500 px-2.5 py-1 text-[0.625rem] font-medium text-white transition-all hover:opacity-90 disabled:opacity-40"
+          >
+            <Download size="0.6875rem" />
+            {exportingSelected ? "Exporting..." : "Export ZIP"}
+          </button>
+          <button
+            onClick={exitSelectionMode}
+            className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+          >
+            Done
+          </button>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative">
@@ -129,6 +211,7 @@ export function PresetsPanel() {
       <div className="stagger-children flex flex-col gap-1">
         {filteredPresets.map((preset) => {
           const isSelected = activePresetId === preset.id;
+          const isBulkSelected = selectedPresetIds.has(preset.id);
           const sectionCount = getSectionCount(preset);
           const wrapFormat = (preset.wrapFormat ?? "xml") as string;
           const isDefault = preset.isDefault === "true";
@@ -138,11 +221,30 @@ export function PresetsPanel() {
               key={preset.id}
               className={cn(
                 "group relative flex cursor-pointer items-center gap-3 rounded-xl p-2.5 transition-all hover:bg-[var(--sidebar-accent)]",
+                selectionMode && isBulkSelected && "ring-1 ring-purple-400/40 bg-purple-400/10",
                 isSelected && "ring-1 ring-purple-400/40 bg-purple-400/5",
               )}
             >
               {/* Click to open editor */}
-              <div className="flex min-w-0 flex-1 items-center gap-3" onClick={() => openPresetDetail(preset.id)}>
+              <div
+                className="flex min-w-0 flex-1 items-center gap-3"
+                onClick={() => {
+                  if (selectionMode) toggleSelection(preset.id);
+                  else openPresetDetail(preset.id);
+                }}
+              >
+                {selectionMode && (
+                  <div
+                    className={cn(
+                      "flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-colors",
+                      isBulkSelected
+                        ? "border-purple-400 bg-purple-400 text-white"
+                        : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)] text-transparent",
+                    )}
+                  >
+                    <Check size="0.75rem" />
+                  </div>
+                )}
                 <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-purple-400 to-violet-500 text-white shadow-sm">
                   <FileText size="1rem" />
                   {isSelected && (
@@ -172,7 +274,8 @@ export function PresetsPanel() {
               </div>
 
               {/* Action buttons */}
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex shrink-0 items-center gap-0.5 rounded-lg bg-[var(--sidebar)] px-1 py-0.5 opacity-0 shadow-sm ring-1 ring-[var(--border)] transition-opacity group-hover:opacity-100 max-md:opacity-100">
+              {!selectionMode && (
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex shrink-0 items-center gap-0.5 rounded-lg bg-[var(--sidebar)] px-1 py-0.5 opacity-0 shadow-sm ring-1 ring-[var(--border)] transition-opacity group-hover:opacity-100 max-md:opacity-100">
                 {activeChat && (
                   <button
                     onClick={(e) => {
@@ -224,16 +327,17 @@ export function PresetsPanel() {
                   }}
                   className="rounded-lg p-1.5 transition-all hover:bg-[var(--destructive)]/15 active:scale-90"
                   title="Delete"
-                >
-                  <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
-                </button>
-              </div>
+                  >
+                    <Trash2 size="0.75rem" className="text-[var(--destructive)]" />
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      {activeChat && (
+      {activeChat && !selectionMode && (
         <p className="px-1 text-[0.625rem] text-[var(--muted-foreground)]/60">
           Click a preset to edit · hover → "Use" to assign to chat
         </p>

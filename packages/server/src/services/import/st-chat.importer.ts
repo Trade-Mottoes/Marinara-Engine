@@ -4,6 +4,7 @@
 import type { DB } from "../../db/connection.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import type { ChatMode } from "@marinara-engine/shared";
+import { latestTrustedTimestamp, normalizeTimestampOverrides, parseTrustedTimestamp, type TimestampOverrides } from "./import-timestamps.js";
 
 interface STChatHeader {
   user_name?: string;
@@ -34,6 +35,8 @@ export interface ImportSTChatOptions {
   speakerMap?: Record<string, string>;
   /** Group ID to associate this chat with (for grouping branches) */
   groupId?: string | null;
+  /** Source file timestamps to preserve when trustworthy */
+  timestampOverrides?: TimestampOverrides | null;
 }
 
 /**
@@ -66,24 +69,12 @@ export async function importSTChat(jsonlContent: string, db: DB, opts?: ImportST
     }
   }
 
-  // Create the chat
-  const chat = await storage.create({
-    name: opts?.chatName ?? `${characterName} (imported)`,
-    mode: (opts?.mode ?? "roleplay") as ChatMode,
-    characterIds,
-    groupId: opts?.groupId ?? null,
-    personaId: null,
-    promptPresetId: null,
-    connectionId: null,
-  });
-
-  if (!chat) return { error: "Failed to create chat" };
-
-  // Import messages in batch
+  const messageTimestamps: string[] = [];
   const msgInputs: {
     role: "system" | "user" | "assistant" | "narrator";
     characterId: string | null;
     content: string;
+    createdAt?: string;
   }[] = [];
   for (let i = 1; i < lines.length; i++) {
     try {
@@ -106,13 +97,38 @@ export async function importSTChat(jsonlContent: string, db: DB, opts?: ImportST
         }
       }
 
-      msgInputs.push({ role, characterId: messageCharacterId, content });
+      const createdAt = parseTrustedTimestamp(stMsg.send_date);
+      if (createdAt) messageTimestamps.push(createdAt);
+
+      msgInputs.push({ role, characterId: messageCharacterId, content, ...(createdAt ? { createdAt } : {}) });
     } catch {
       // Skip malformed lines
     }
   }
 
-  await storage.createMessagesBatch(chat.id, msgInputs);
+  const latestMessageTimestamp = latestTrustedTimestamp(messageTimestamps);
+  const chatTimestamps = normalizeTimestampOverrides({
+    createdAt: opts?.timestampOverrides?.createdAt ?? latestMessageTimestamp ?? null,
+    updatedAt:
+      latestMessageTimestamp ?? opts?.timestampOverrides?.updatedAt ?? opts?.timestampOverrides?.createdAt ?? null,
+  });
+
+  const chat = await storage.create(
+    {
+      name: opts?.chatName ?? `${characterName} (imported)`,
+      mode: (opts?.mode ?? "roleplay") as ChatMode,
+      characterIds,
+      groupId: opts?.groupId ?? null,
+      personaId: null,
+      promptPresetId: null,
+      connectionId: null,
+    },
+    chatTimestamps,
+  );
+
+  if (!chat) return { error: "Failed to create chat" };
+
+  await storage.createMessagesBatch(chat.id, msgInputs, chatTimestamps);
 
   return {
     success: true,

@@ -81,6 +81,34 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
+  /** Download a POST endpoint as a file (useful for bulk exports). */
+  downloadPost: async (path: string, body: unknown, fallbackFilename = "export.bin") => {
+    const res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({ error: res.statusText }));
+      throw new ApiError(res.status, payload.error ?? "Download failed");
+    }
+    const disposition = res.headers.get("Content-Disposition");
+    let filename = fallbackFilename;
+    if (disposition) {
+      const match = disposition.match(/filename="?([^";\n]+)"?/);
+      if (match?.[1]) filename = decodeURIComponent(match[1]);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
   /**
    * Stream an SSE endpoint. Returns an async iterable of parsed events.
    */

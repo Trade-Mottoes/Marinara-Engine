@@ -15,6 +15,13 @@ import { createConnectionsStorage } from "../services/storage/connections.storag
 import { processLorebooks } from "../services/lorebook/index.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import type { APIProvider } from "@marinara-engine/shared";
+import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
+import AdmZip from "adm-zip";
+
+function toSafeExportName(name: string, fallback: string) {
+  const sanitized = name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
+  return sanitized || fallback;
+}
 
 export async function lorebooksRoutes(app: FastifyInstance) {
   const storage = createLorebooksStorage(app.db);
@@ -37,7 +44,14 @@ export async function lorebooksRoutes(app: FastifyInstance) {
 
   app.post("/", async (req) => {
     const input = createLorebookSchema.parse(req.body);
-    return storage.create(input);
+    const body = req.body as Record<string, unknown>;
+    return storage.create(
+      input,
+      normalizeTimestampOverrides({
+        createdAt: body.createdAt,
+        updatedAt: body.updatedAt,
+      }),
+    );
   });
 
   app.patch<{ Params: { id: string } }>("/:id", async (req, reply) => {
@@ -70,6 +84,41 @@ export async function lorebooksRoutes(app: FastifyInstance) {
         `attachment; filename="${encodeURIComponent(String(lb.name || "lorebook"))}.marinara.json"`,
       )
       .send(envelope);
+  });
+
+  app.post("/export-bulk", async (req, reply) => {
+    const { ids } = req.body as { ids?: string[] };
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.status(400).send({ error: "ids array is required" });
+    }
+
+    const zip = new AdmZip();
+    let exportedCount = 0;
+    for (const id of ids) {
+      const lb = (await storage.getById(id)) as Record<string, unknown> | null;
+      if (!lb) continue;
+      const entries = await storage.listEntries(id);
+      const envelope: ExportEnvelope = {
+        type: "marinara_lorebook",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data: { lorebook: lb, entries },
+      };
+      zip.addFile(
+        `${toSafeExportName(String(lb.name || "lorebook"), `lorebook-${exportedCount + 1}`)}.marinara.json`,
+        Buffer.from(JSON.stringify(envelope, null, 2), "utf-8"),
+      );
+      exportedCount++;
+    }
+
+    if (exportedCount === 0) {
+      return reply.status(404).send({ error: "No lorebooks found for the provided ids" });
+    }
+
+    return reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", 'attachment; filename="marinara-lorebooks.zip"')
+      .send(zip.toBuffer());
   });
 
   // ── Entries CRUD ──

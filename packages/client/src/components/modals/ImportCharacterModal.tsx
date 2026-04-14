@@ -7,111 +7,153 @@ import { Download, FileJson, Image, CheckCircle, XCircle, Loader2 } from "lucide
 import { useQueryClient } from "@tanstack/react-query";
 import { characterKeys } from "../../hooks/use-characters";
 import { lorebookKeys } from "../../hooks/use-lorebooks";
-import { parsePngCharacterCard } from "../../lib/png-parser";
+import { api } from "../../lib/api-client";
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
+type ImportResultRow = {
+  filename: string;
+  success: boolean;
+  message: string;
+};
+
 export function ImportCharacterModal({ open, onClose }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "done">("idle");
+  const [results, setResults] = useState<ImportResultRow[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const qc = useQueryClient();
 
-  const handleFile = async (file: File) => {
+  const handleFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     setStatus("loading");
-    setMessage("");
+    setResults([]);
 
     try {
-      const isPng = file.name.toLowerCase().endsWith(".png") || file.type === "image/png";
-      const isCharX = file.name.toLowerCase().endsWith(".charx");
+      const stCharacterFiles: File[] = [];
+      const marinaraPayloads: Array<{ file: File; payload: Record<string, unknown> }> = [];
 
-      // CharX files are zip archives — upload as multipart
-      if (isCharX) {
-        const form = new FormData();
-        form.append("file", file);
-        const res = await fetch("/api/import/st-character", {
-          method: "POST",
-          body: form,
-        });
-        const data = await res.json();
-        if (data.success) {
-          setStatus("success");
-          setMessage(`Imported "${data.name ?? file.name}" successfully!`);
-          qc.invalidateQueries({ queryKey: characterKeys.list() });
-          if (data.lorebook) {
-            qc.invalidateQueries({ queryKey: lorebookKeys.all });
-          }
-        } else {
-          setStatus("error");
-          setMessage(data.error ?? "Import failed");
+      for (const file of files) {
+        const lower = file.name.toLowerCase();
+        if (lower.endsWith(".png") || lower.endsWith(".charx")) {
+          stCharacterFiles.push(file);
+          continue;
         }
-        return;
-      }
 
-      let json: Record<string, unknown>;
-      let avatarDataUrl: string | null = null;
-
-      if (isPng) {
-        // Extract character JSON and image from PNG tEXt chunk
-        const result = await parsePngCharacterCard(file);
-        json = result.json;
-        avatarDataUrl = result.imageDataUrl;
-      } else {
-        // Plain JSON file
         const text = await file.text();
-        json = JSON.parse(text);
-      }
+        const json = JSON.parse(text) as Record<string, unknown>;
+        const isMarinaraEnvelope =
+          json.version === 1 && typeof json.type === "string" && (json.type as string).startsWith("marinara_");
 
-      // Detect Marinara envelope format and route to the native importer
-      const isMarinaraEnvelope =
-        json.version === 1 && typeof json.type === "string" && (json.type as string).startsWith("marinara_");
-
-      let res: Response;
-      if (isMarinaraEnvelope) {
-        res = await fetch("/api/import/marinara", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(json),
-        });
-      } else {
-        res = await fetch("/api/import/st-character", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...json, _avatarDataUrl: avatarDataUrl }),
-        });
-      }
-      const data = await res.json();
-      if (data.success) {
-        setStatus("success");
-        setMessage(`Imported "${data.name ?? file.name}" successfully!`);
-        qc.invalidateQueries({ queryKey: characterKeys.list() });
-        if (data.lorebook) {
-          qc.invalidateQueries({ queryKey: lorebookKeys.all });
+        if (isMarinaraEnvelope) {
+          marinaraPayloads.push({ file, payload: json });
+        } else {
+          stCharacterFiles.push(file);
         }
-      } else {
-        setStatus("error");
-        setMessage(data.error ?? "Import failed");
+      }
+
+      const nextResults: ImportResultRow[] = [];
+      let importedLorebook = false;
+
+      if (stCharacterFiles.length > 0) {
+        const form = new FormData();
+        for (const file of stCharacterFiles) {
+          form.append("files", file);
+        }
+        form.append(
+          "fileTimestamps",
+          JSON.stringify(
+            stCharacterFiles.map((file) => ({
+              name: file.name,
+              lastModified: file.lastModified,
+            })),
+          ),
+        );
+
+        const batchResult = await api.upload<{
+          success: boolean;
+          results: Array<{
+            filename: string;
+            success: boolean;
+            name?: string;
+            error?: string;
+            lorebook?: { lorebookId?: string };
+          }>;
+        }>("/import/st-character/batch", form);
+
+        for (const result of batchResult.results) {
+          if (result.lorebook?.lorebookId) importedLorebook = true;
+          nextResults.push({
+            filename: result.filename,
+            success: result.success,
+            message: result.success ? `Imported "${result.name ?? result.filename}"` : (result.error ?? "Import failed"),
+          });
+        }
+      }
+
+      for (const item of marinaraPayloads) {
+        try {
+          const result = await api.post<{
+            success: boolean;
+            name?: string;
+            error?: string;
+          }>("/import/marinara", {
+            ...item.payload,
+            timestampOverrides: {
+              createdAt: item.file.lastModified,
+              updatedAt: item.file.lastModified,
+            },
+          });
+
+          nextResults.push({
+            filename: item.file.name,
+            success: result.success,
+            message: result.success
+              ? `Imported "${result.name ?? item.file.name}"`
+              : (result.error ?? "Import failed"),
+          });
+        } catch (error) {
+          nextResults.push({
+            filename: item.file.name,
+            success: false,
+            message: error instanceof Error ? error.message : "Import failed",
+          });
+        }
+      }
+
+      setResults(nextResults);
+      setStatus("done");
+
+      if (nextResults.some((result) => result.success)) {
+        qc.invalidateQueries({ queryKey: characterKeys.list() });
+      }
+      if (importedLorebook) {
+        qc.invalidateQueries({ queryKey: lorebookKeys.all });
       }
     } catch (err) {
-      setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Failed to parse file");
+      setResults([
+        {
+          filename: files.length === 1 ? files[0]!.name : `${files.length} files`,
+          success: false,
+          message: err instanceof Error ? err.message : "Failed to parse import files",
+        },
+      ]);
+      setStatus("done");
     }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    handleFiles(Array.from(e.dataTransfer.files));
   };
 
   const reset = () => {
     setStatus("idle");
-    setMessage("");
+    setResults([]);
   };
 
   return (
@@ -144,9 +186,9 @@ export function ImportCharacterModal({ open, onClose }: Props) {
             className={`transition-colors ${dragOver ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`}
           />
           <div className="text-center">
-            <p className="text-sm font-medium">Drop a file here or click to browse</p>
+            <p className="text-sm font-medium">Drop one or more files here or click to browse</p>
             <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Supports JSON, PNG (with embedded data), CharX, and Marinara exports
+              Supports JSON, PNG character cards, CharX, and Marinara exports
             </p>
           </div>
           <div className="flex gap-2">
@@ -169,10 +211,10 @@ export function ImportCharacterModal({ open, onClose }: Props) {
           ref={fileRef}
           type="file"
           accept=".json,.png,.marinara,.charx"
+          multiple
           className="hidden"
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFile(file);
+            handleFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -181,19 +223,41 @@ export function ImportCharacterModal({ open, onClose }: Props) {
         {status === "loading" && (
           <div className="flex items-center gap-2 rounded-lg bg-[var(--secondary)] p-3 text-xs">
             <Loader2 size="0.875rem" className="animate-spin text-[var(--primary)]" />
-            Importing...
+            Importing files...
           </div>
         )}
-        {status === "success" && (
-          <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-400">
-            <CheckCircle size="0.875rem" />
-            {message}
-          </div>
-        )}
-        {status === "error" && (
-          <div className="flex items-center gap-2 rounded-lg bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
-            <XCircle size="0.875rem" />
-            {message}
+        {status === "done" && results.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div
+              className={`flex items-center gap-2 rounded-lg p-3 text-xs ${
+                results.some((result) => result.success)
+                  ? "bg-emerald-500/10 text-emerald-400"
+                  : "bg-[var(--destructive)]/10 text-[var(--destructive)]"
+              }`}
+            >
+              {results.some((result) => result.success) ? <CheckCircle size="0.875rem" /> : <XCircle size="0.875rem" />}
+              {results.filter((result) => result.success).length} succeeded,{" "}
+              {results.filter((result) => !result.success).length} failed
+            </div>
+
+            <div className="max-h-52 overflow-y-auto rounded-lg border border-[var(--border)]">
+              {results.map((result) => (
+                <div
+                  key={`${result.filename}-${result.message}`}
+                  className="flex items-start gap-2 border-b border-[var(--border)] px-3 py-2 text-xs last:border-b-0"
+                >
+                  {result.success ? (
+                    <CheckCircle size="0.8125rem" className="mt-0.5 shrink-0 text-emerald-400" />
+                  ) : (
+                    <XCircle size="0.8125rem" className="mt-0.5 shrink-0 text-[var(--destructive)]" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{result.filename}</div>
+                    <div className="text-[var(--muted-foreground)]">{result.message}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

@@ -4,6 +4,7 @@
 import type { DB } from "../../db/connection.js";
 import { createLorebooksStorage } from "../storage/lorebooks.storage.js";
 import type { CreateLorebookEntryInput, LorebookCategory } from "@marinara-engine/shared";
+import type { TimestampOverrides } from "./import-timestamps.js";
 
 interface STWorldInfoEntry {
   uid?: number;
@@ -208,7 +209,13 @@ function detectEntryTag(entry: STWorldInfoEntry): string {
 export async function importSTLorebook(
   raw: Record<string, unknown>,
   db: DB,
-  options?: { characterId?: string; namePrefix?: string; fallbackName?: string },
+  options?: {
+    characterId?: string;
+    namePrefix?: string;
+    fallbackName?: string;
+    timestampOverrides?: TimestampOverrides | null;
+    existingLorebookId?: string | null;
+  },
 ) {
   const storage = createLorebooksStorage(db);
   const wi = raw as unknown as STWorldInfo;
@@ -220,17 +227,33 @@ export async function importSTLorebook(
     ? `${options.namePrefix} — ${wi.name ?? "Lorebook"}`
     : (wi.name ?? options?.fallbackName ?? "Imported Lorebook");
 
-  // Create the lorebook
-  const lorebook = (await storage.create({
+  const lorebookInput = {
     name: lbName,
     description: "Imported from SillyTavern",
     category: detectedCategory,
     scanDepth: 2,
     tokenBudget: 2048,
     recursiveScanning: false,
-    generatedBy: "import",
+    generatedBy: "import" as const,
     characterId: options?.characterId ?? null,
-  })) as Record<string, unknown> | null;
+  };
+
+  let lorebook: Record<string, unknown> | null = null;
+  const existingLorebookId = options?.existingLorebookId ?? null;
+  if (existingLorebookId) {
+    const existing = (await storage.getById(existingLorebookId)) as Record<string, unknown> | null;
+    if (existing) {
+      lorebook = (await storage.update(existingLorebookId, lorebookInput)) as Record<string, unknown> | null;
+      const existingEntries = (await storage.listEntries(existingLorebookId)) as unknown as Array<{ id: string }>;
+      for (const entry of existingEntries) {
+        await storage.removeEntry(entry.id);
+      }
+    }
+  }
+
+  if (!lorebook) {
+    lorebook = (await storage.create(lorebookInput, options?.timestampOverrides)) as Record<string, unknown> | null;
+  }
 
   if (!lorebook) return { error: "Failed to create lorebook" };
 
@@ -321,5 +344,6 @@ export async function importSTLorebook(
     name: lorebookName,
     category: detectedCategory,
     entriesImported: imported,
+    reimported: !!existingLorebookId,
   };
 }

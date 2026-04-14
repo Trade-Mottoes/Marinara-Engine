@@ -5,6 +5,7 @@ import { useState, useRef } from "react";
 import { Modal } from "../ui/Modal";
 import { Download, FileJson, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { api } from "../../lib/api-client";
 
 interface Props {
   open: boolean;
@@ -13,56 +14,72 @@ interface Props {
 
 export function ImportLorebookModal({ open, onClose }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "done">("idle");
+  const [results, setResults] = useState<Array<{ filename: string; success: boolean; message: string }>>([]);
   const [dragOver, setDragOver] = useState(false);
   const qc = useQueryClient();
 
-  const handleFile = async (file: File) => {
+  const handleFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     setStatus("loading");
-    setMessage("");
+    setResults([]);
 
-    try {
-      const text = await file.text();
-      const json = JSON.parse(text) as Record<string, unknown>;
+    const nextResults: Array<{ filename: string; success: boolean; message: string }> = [];
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text) as Record<string, unknown>;
 
-      const isMarinaraLorebook = json.type === "marinara_lorebook" && json.version === 1;
-      const endpoint = isMarinaraLorebook ? "/api/import/marinara" : "/api/import/st-lorebook";
+        const isMarinaraLorebook = json.type === "marinara_lorebook" && json.version === 1;
+        const endpoint = isMarinaraLorebook ? "/import/marinara" : "/import/st-lorebook";
+        const payload = isMarinaraLorebook
+          ? {
+              ...json,
+              timestampOverrides: {
+                createdAt: file.lastModified,
+                updatedAt: file.lastModified,
+              },
+            }
+          : {
+              ...json,
+              __filename: file.name.replace(/\.json$/i, ""),
+              timestampOverrides: {
+                createdAt: file.lastModified,
+                updatedAt: file.lastModified,
+              },
+            };
 
-      if (!isMarinaraLorebook) {
-        json.__filename = file.name.replace(/\.json$/i, "");
+        const data = await api.post<{ success: boolean; error?: string }>(endpoint, payload);
+        nextResults.push({
+          filename: file.name,
+          success: data.success,
+          message: data.success ? "Imported lorebook" : (data.error ?? "Import failed"),
+        });
+      } catch (error) {
+        nextResults.push({
+          filename: file.name,
+          success: false,
+          message: error instanceof Error ? error.message : "Failed to parse file",
+        });
       }
+    }
 
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(json),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setStatus("success");
-        setMessage(`Imported lorebook successfully!`);
-        qc.invalidateQueries({ queryKey: ["lorebooks"] });
-      } else {
-        setStatus("error");
-        setMessage(data.error ?? "Import failed");
-      }
-    } catch {
-      setStatus("error");
-      setMessage("Failed to parse file — must be valid JSON");
+    setResults(nextResults);
+    setStatus("done");
+    if (nextResults.some((result) => result.success)) {
+      qc.invalidateQueries({ queryKey: ["lorebooks"] });
     }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    handleFiles(Array.from(e.dataTransfer.files));
   };
 
   const reset = () => {
     setStatus("idle");
-    setMessage("");
+    setResults([]);
   };
 
   return (
@@ -90,7 +107,7 @@ export function ImportLorebookModal({ open, onClose }: Props) {
           }`}
         >
           <Download size="2rem" className={dragOver ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"} />
-          <p className="text-sm font-medium">Drop lorebook JSON here or click to browse</p>
+          <p className="text-sm font-medium">Drop one or more lorebook files here or click to browse</p>
           <span className="flex items-center gap-1 rounded-full bg-[var(--secondary)] px-2.5 py-1 text-xs text-[var(--muted-foreground)]">
             <FileJson size="0.75rem" /> .json
           </span>
@@ -100,10 +117,10 @@ export function ImportLorebookModal({ open, onClose }: Props) {
           ref={fileRef}
           type="file"
           accept=".json"
+          multiple
           className="hidden"
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) handleFile(f);
+            handleFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -113,14 +130,37 @@ export function ImportLorebookModal({ open, onClose }: Props) {
             <Loader2 size="0.875rem" className="animate-spin text-[var(--primary)]" /> Importing...
           </div>
         )}
-        {status === "success" && (
-          <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-400">
-            <CheckCircle size="0.875rem" /> {message}
-          </div>
-        )}
-        {status === "error" && (
-          <div className="flex items-center gap-2 rounded-lg bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
-            <XCircle size="0.875rem" /> {message}
+        {status === "done" && results.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div
+              className={`flex items-center gap-2 rounded-lg p-3 text-xs ${
+                results.some((result) => result.success)
+                  ? "bg-emerald-500/10 text-emerald-400"
+                  : "bg-[var(--destructive)]/10 text-[var(--destructive)]"
+              }`}
+            >
+              {results.some((result) => result.success) ? <CheckCircle size="0.875rem" /> : <XCircle size="0.875rem" />}
+              {results.filter((result) => result.success).length} succeeded,{" "}
+              {results.filter((result) => !result.success).length} failed
+            </div>
+            <div className="max-h-52 overflow-y-auto rounded-lg border border-[var(--border)]">
+              {results.map((result) => (
+                <div
+                  key={`${result.filename}-${result.message}`}
+                  className="flex items-start gap-2 border-b border-[var(--border)] px-3 py-2 text-xs last:border-b-0"
+                >
+                  {result.success ? (
+                    <CheckCircle size="0.8125rem" className="mt-0.5 shrink-0 text-emerald-400" />
+                  ) : (
+                    <XCircle size="0.8125rem" className="mt-0.5 shrink-0 text-[var(--destructive)]" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{result.filename}</div>
+                    <div className="text-[var(--muted-foreground)]">{result.message}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

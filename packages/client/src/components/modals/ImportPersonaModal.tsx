@@ -6,6 +6,7 @@ import { Modal } from "../ui/Modal";
 import { Download, FileJson, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { characterKeys } from "../../hooks/use-characters";
+import { api } from "../../lib/api-client";
 
 interface Props {
   open: boolean;
@@ -14,47 +15,43 @@ interface Props {
 
 export function ImportPersonaModal({ open, onClose }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [message, setMessage] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "done">("idle");
+  const [results, setResults] = useState<Array<{ filename: string; success: boolean; message: string }>>([]);
   const [dragOver, setDragOver] = useState(false);
   const qc = useQueryClient();
 
-  const handleFile = async (file: File) => {
+  const handleFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     setStatus("loading");
-    setMessage("");
+    setResults([]);
 
-    try {
-      const text = await file.text();
-      const json = JSON.parse(text) as Record<string, unknown>;
+    const nextResults: Array<{ filename: string; success: boolean; message: string }> = [];
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text) as Record<string, unknown>;
 
-      // Marinara envelope format — route to the native importer
-      const isMarinaraEnvelope =
-        json.version === 1 && typeof json.type === "string" && (json.type as string).startsWith("marinara_");
+        const isMarinaraEnvelope =
+          json.version === 1 && typeof json.type === "string" && (json.type as string).startsWith("marinara_");
 
-      if (isMarinaraEnvelope) {
-        const res = await fetch("/api/import/marinara", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(json),
-        });
-        const data = await res.json();
-        if (data.success) {
-          setStatus("success");
-          setMessage(`Imported "${data.name ?? file.name}" successfully!`);
-          qc.invalidateQueries({ queryKey: characterKeys.personas });
-        } else {
-          setStatus("error");
-          setMessage(data.error ?? "Import failed");
+        if (isMarinaraEnvelope) {
+          const data = await api.post<{ success: boolean; name?: string; error?: string }>("/import/marinara", {
+            ...json,
+            timestampOverrides: {
+              createdAt: file.lastModified,
+              updatedAt: file.lastModified,
+            },
+          });
+          nextResults.push({
+            filename: file.name,
+            success: data.success,
+            message: data.success ? `Imported "${data.name ?? file.name}"` : (data.error ?? "Import failed"),
+          });
+          continue;
         }
-        return;
-      }
 
-      // Plain persona JSON — create directly via the personas API
-      const name = typeof json.name === "string" ? json.name : "Imported Persona";
-      const res = await fetch("/api/personas", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        const name = typeof json.name === "string" ? json.name : "Imported Persona";
+        const data = await api.post<{ id?: string; error?: string }>("/characters/personas", {
           name,
           description: json.description ?? "",
           personality: json.personality ?? "",
@@ -62,33 +59,40 @@ export function ImportPersonaModal({ open, onClose }: Props) {
           backstory: json.backstory ?? "",
           appearance: json.appearance ?? "",
           comment: json.comment ?? "",
-        }),
-      });
-      const data = await res.json();
-      if (data.id) {
-        setStatus("success");
-        setMessage(`Imported "${name}" successfully!`);
-        qc.invalidateQueries({ queryKey: characterKeys.personas });
-      } else {
-        setStatus("error");
-        setMessage(data.error ?? "Import failed");
+          tags: json.tags ?? undefined,
+          createdAt: file.lastModified,
+          updatedAt: file.lastModified,
+        });
+        nextResults.push({
+          filename: file.name,
+          success: !!data.id,
+          message: data.id ? `Imported "${name}"` : (data.error ?? "Import failed"),
+        });
+      } catch (err) {
+        nextResults.push({
+          filename: file.name,
+          success: false,
+          message: err instanceof Error ? err.message : "Failed to parse file",
+        });
       }
-    } catch (err) {
-      setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Failed to parse file");
+    }
+
+    setResults(nextResults);
+    setStatus("done");
+    if (nextResults.some((result) => result.success)) {
+      qc.invalidateQueries({ queryKey: characterKeys.personas });
     }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    handleFiles(Array.from(e.dataTransfer.files));
   };
 
   const reset = () => {
     setStatus("idle");
-    setMessage("");
+    setResults([]);
   };
 
   return (
@@ -121,7 +125,7 @@ export function ImportPersonaModal({ open, onClose }: Props) {
             className={`transition-colors ${dragOver ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`}
           />
           <div className="text-center">
-            <p className="text-sm font-medium">Drop a file here or click to browse</p>
+            <p className="text-sm font-medium">Drop one or more files here or click to browse</p>
             <p className="mt-1 text-xs text-[var(--muted-foreground)]">Supports JSON and Marinara persona exports</p>
           </div>
           <div className="flex gap-2">
@@ -138,10 +142,10 @@ export function ImportPersonaModal({ open, onClose }: Props) {
           ref={fileRef}
           type="file"
           accept=".json,.marinara"
+          multiple
           className="hidden"
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFile(file);
+            handleFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -153,16 +157,37 @@ export function ImportPersonaModal({ open, onClose }: Props) {
             Importing...
           </div>
         )}
-        {status === "success" && (
-          <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 p-3 text-xs text-emerald-400">
-            <CheckCircle size="0.875rem" />
-            {message}
-          </div>
-        )}
-        {status === "error" && (
-          <div className="flex items-center gap-2 rounded-lg bg-[var(--destructive)]/10 p-3 text-xs text-[var(--destructive)]">
-            <XCircle size="0.875rem" />
-            {message}
+        {status === "done" && results.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div
+              className={`flex items-center gap-2 rounded-lg p-3 text-xs ${
+                results.some((result) => result.success)
+                  ? "bg-emerald-500/10 text-emerald-400"
+                  : "bg-[var(--destructive)]/10 text-[var(--destructive)]"
+              }`}
+            >
+              {results.some((result) => result.success) ? <CheckCircle size="0.875rem" /> : <XCircle size="0.875rem" />}
+              {results.filter((result) => result.success).length} succeeded,{" "}
+              {results.filter((result) => !result.success).length} failed
+            </div>
+            <div className="max-h-52 overflow-y-auto rounded-lg border border-[var(--border)]">
+              {results.map((result) => (
+                <div
+                  key={`${result.filename}-${result.message}`}
+                  className="flex items-start gap-2 border-b border-[var(--border)] px-3 py-2 text-xs last:border-b-0"
+                >
+                  {result.success ? (
+                    <CheckCircle size="0.8125rem" className="mt-0.5 shrink-0 text-emerald-400" />
+                  ) : (
+                    <XCircle size="0.8125rem" className="mt-0.5 shrink-0 text-[var(--destructive)]" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{result.filename}</div>
+                    <div className="text-[var(--muted-foreground)]">{result.message}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
