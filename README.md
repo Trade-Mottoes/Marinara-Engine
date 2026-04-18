@@ -46,12 +46,29 @@
 </p>
 
 <p align="center">
+  <img src="docs/screenshots/Browser_Game_Screen.png" width="90%" alt="Game Mode — Scene" />
+  <br/>
+  <em>Game Mode — AI Game Master, party of characters, generated backgrounds, weather, and time of day</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/Browser_Game_Dialogue.png" width="45%" alt="Game Dialogue" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/Browser_Game_Party_Card.png" width="45%" alt="Party Card" />
+</p>
+<p align="center">
+  <em>NPC dialogue with reputation tracking &nbsp;&nbsp;·&nbsp;&nbsp; Party member card with stats and inventory</em>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/Mobile_Group_Conversation.png" width="30%" alt="Mobile Group Conversation" />
   &nbsp;&nbsp;&nbsp;&nbsp;
   <img src="docs/screenshots/Mobile_Roleplay_View.png" width="30%" alt="Mobile Roleplay" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/Game_Mobile_Screen.png" width="30%" alt="Mobile Game Mode" />
 </p>
 <p align="center">
-  <em>Fully responsive — works on phones and tablets via PWA</em>
+  <em>Fully responsive — Conversations, Roleplay, and Game Mode all work on phones and tablets via PWA</em>
 </p>
 
 ---
