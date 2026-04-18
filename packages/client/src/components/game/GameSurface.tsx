@@ -1110,15 +1110,16 @@ export function GameSurface({
       return;
     }
 
-    // Safety timeout: if neither onSuccess nor onError fires within 30s, auto-fail
+    // Safety timeout: if neither onSuccess nor onError fires within 120s, auto-fail.
+    // Generous because scene-wrap may still generate a background image inline.
     sceneAnalysisTimeoutRef.current = setTimeout(() => {
       sceneAnalysisTimeoutRef.current = null;
       if (sceneReadyMsgIdRef.current !== msg.id) {
-        console.warn("[scene-wrapup] Scene analysis timed out after 30s, falling back to inline tags");
+        console.warn("[scene-wrapup] Scene analysis timed out after 120s, falling back to inline tags");
         setSceneAnalysisFailed(true);
         applyInlineTags(tags, assets, msg);
       }
-    }, 30_000);
+    }, 120_000);
   };
 
   function applyInlineTags(gmTags: ReturnType<typeof parseGmTags>, assetMap: any, msg: { id: string }) {
@@ -2177,10 +2178,12 @@ export function GameSurface({
 
   // World is built but the game hasn't started yet -- show "Start Game" screen.
   // Keep it visible until: (1) assistant content exists, (2) streaming is done,
-  // (3) scene preparation (sidecar / connection scene model) has finished.
-  // Once ALL three conditions are met for the first time the screen never returns.
+  // (3) scene preparation (sidecar / connection scene model) has finished,
+  // (4) any in-flight image / NPC portrait generation has completed.
+  // Once ALL conditions are met for the first time the screen never returns.
   // sceneProcessed is computed above (near scenePreparing).
-  const firstTurnFullyReady = hasEverHadContent && !isStreaming && sceneProcessed;
+  const firstTurnFullyReady =
+    hasEverHadContent && !isStreaming && sceneProcessed && !pendingAssetGeneration;
   // Don't auto-dismiss: wait for user to click Continue after typewriter finishes.
 
   const awaitingFirstTurn = sessionStatus === "active" && !firstTurnPresentedRef.current;
@@ -2233,9 +2236,11 @@ export function GameSurface({
                       <span>
                         {hasEverHadContent && !sceneProcessed
                           ? "Preparing the scene..."
-                          : hasEverHadContent && isStreaming
-                            ? "The GM is narrating..."
-                            : "The adventure begins..."}
+                          : hasEverHadContent && pendingAssetGeneration
+                            ? "Generating images..."
+                            : hasEverHadContent && isStreaming
+                              ? "The GM is narrating..."
+                              : "The adventure begins..."}
                       </span>
                     </div>
                     {/* Retry only when scene analysis actually failed */}

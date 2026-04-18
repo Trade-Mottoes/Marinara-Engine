@@ -28,6 +28,11 @@ const VALID_TYPES = new Set<PartyDialogueType>(["main", "side", "extra", "action
 const PARTY_LINE_RE =
   /^\s*\[([^\]]+)\]\s*\[(main|side|extra|action|thought|whisper(?::([^\]]+))?)]\s*(?:\[([^\]]+)\])?\s*:\s*(.+)$/i;
 
+// Fallback for malformed lines like `[Name] [expression]:` or `[Name] [expression] [expression]:`
+// where the model forgot the type slot. We default the type to "main" and use the first/last
+// non-type bracket as the expression. Skips lines whose second bracket *is* a valid type.
+const FALLBACK_LINE_RE = /^\s*\[([^\]]+)\]\s*\[([^\]]+)\](?:\s*\[([^\]]+)\])?\s*:\s*(.+)$/;
+
 export function parsePartyDialogue(raw: string): PartyDialogueLine[] {
   const lines = raw.split(/\r?\n/);
   const result: PartyDialogueLine[] = [];
@@ -37,19 +42,44 @@ export function parsePartyDialogue(raw: string): PartyDialogueLine[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
+    let character: string;
+    let rawType: string;
+    let target: string | undefined;
+    let expression: string | undefined;
+    let content: string;
+
     const match = trimmed.match(PARTY_LINE_RE);
-    if (!match) {
-      skipped++;
-      continue;
+    if (match) {
+      character = match[1]!.trim();
+      rawType = match[2]!.toLowerCase().replace(/:.*$/, ""); // strip :Target from whisper:Target
+      target = match[3]?.trim() || undefined;
+      expression = match[4]?.trim() || undefined;
+      content = match[5]!.trim();
+    } else {
+      // Tolerant fallback: `[Name] [expr]:` or `[Name] [expr1] [expr2]:` (model duplicated/dropped type)
+      const fb = trimmed.match(FALLBACK_LINE_RE);
+      if (!fb) {
+        skipped++;
+        continue;
+      }
+      const tag2 = fb[2]!.trim().toLowerCase().replace(/:.*$/, "");
+      // Don't double-handle anything PARTY_LINE_RE was supposed to catch
+      if (VALID_TYPES.has(tag2 as PartyDialogueType) || tag2.startsWith("whisper")) {
+        skipped++;
+        continue;
+      }
+      character = fb[1]!.trim();
+      rawType = "main";
+      // Prefer the last non-type bracket as the expression (handles `[expr] [expr]` duplicates)
+      expression = (fb[3] ?? fb[2])!.trim() || undefined;
+      content = fb[4]!.trim();
     }
 
-    const character = match[1]!.trim();
-    const rawType = match[2]!.toLowerCase().replace(/:.*$/, ""); // strip :Target from whisper:Target
-    const target = match[3]?.trim() || undefined;
-    const expression = match[4]?.trim() || undefined;
-    let content = match[5]!.trim();
-
     if (!VALID_TYPES.has(rawType as PartyDialogueType)) continue;
+
+    // Normalize legacy `extra` → `side` (the two types were always identical; `extra` is kept
+    // in the union only so historical saved messages still parse).
+    if (rawType === "extra") rawType = "side";
 
     // Strip surrounding quotes if present (for main/side/extra/whisper dialogue)
     if (

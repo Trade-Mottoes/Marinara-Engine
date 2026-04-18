@@ -2055,7 +2055,11 @@ export async function gameRoutes(app: FastifyInstance) {
             }
 
             // ── NPC portrait generation ──
-            // First, try to resolve avatars from the character library
+            // First, try to resolve avatars from the character library (cheap, in-memory).
+            // Actual image generation for NPCs missing portraits is deferred to the client's
+            // follow-up POST /game/generate-assets so it doesn't block scene-wrap — which
+            // would otherwise keep the "Preparing the scene…" spinner waiting (or hit the
+            // client-side safety timeout and let the user play before assets are ready).
             const npcs = (input.context.trackedNpcs ?? []) as Array<Record<string, unknown>>;
             const charStore = createCharactersStorage(app.db);
             const allChars = await charStore.list();
@@ -2070,54 +2074,31 @@ export async function gameRoutes(app: FastifyInstance) {
                 /* skip */
               }
             }
+            const libResolvedNpcs: Array<{ name: string; avatarUrl: string }> = [];
             for (const npc of npcs) {
               if (!npc.avatarUrl && npc.name) {
                 const libAvatar = findCharAvatarFuzzy(npc.name as string, charAvatarByName);
-                if (libAvatar) npc.avatarUrl = libAvatar;
+                if (libAvatar) {
+                  npc.avatarUrl = libAvatar;
+                  libResolvedNpcs.push({ name: npc.name as string, avatarUrl: libAvatar });
+                }
               }
             }
 
-            const npcsNeedingAvatars = npcs.filter((n) => !n.avatarUrl && n.name && n.description);
-
-            if (npcsNeedingAvatars.length > 0) {
+            // Persist any library-resolved avatars to chat metadata (no image gen involved)
+            if (libResolvedNpcs.length > 0) {
               const chatsStore = createChatsStorage(app.db);
-              const updatedNpcs = [...npcs];
-
-              for (const npc of npcsNeedingAvatars) {
-                const avatarUrl = await generateNpcPortrait({
-                  chatId: input.chatId,
-                  npcName: npc.name as string,
-                  appearance: (npc.description as string) || "",
-                  artStyle,
-                  imgModel,
-                  imgBaseUrl,
-                  imgApiKey,
-                });
-
-                if (avatarUrl) {
-                  // Update in the local array
-                  npc.avatarUrl = avatarUrl;
-                  // Find and update in updatedNpcs
-                  const idx = updatedNpcs.findIndex(
-                    (u) => (u.name as string)?.toLowerCase() === (npc.name as string).toLowerCase(),
-                  );
-                  if (idx >= 0) updatedNpcs[idx] = { ...updatedNpcs[idx]!, avatarUrl };
-                }
-              }
-
-              // Persist updated NPC list with avatar URLs to chat metadata
               const latestChat = await chatsStore.getById(input.chatId);
               if (latestChat) {
                 const latestMeta = parseMeta(latestChat.metadata);
                 const currentNpcs = (latestMeta.gameNpcs as GameNpc[]) ?? [];
                 let changed = false;
-                for (const updated of updatedNpcs) {
-                  if (!updated.avatarUrl) continue;
+                for (const resolved of libResolvedNpcs) {
                   const existing = currentNpcs.find(
-                    (n) => n.name.toLowerCase() === (updated.name as string).toLowerCase(),
+                    (n) => n.name.toLowerCase() === resolved.name.toLowerCase(),
                   );
                   if (existing && !existing.avatarUrl) {
-                    existing.avatarUrl = updated.avatarUrl as string;
+                    existing.avatarUrl = resolved.avatarUrl;
                     changed = true;
                   }
                 }
@@ -2125,11 +2106,7 @@ export async function gameRoutes(app: FastifyInstance) {
                   await chatsStore.updateMetadata(input.chatId, { ...latestMeta, gameNpcs: currentNpcs });
                 }
               }
-
-              // Include generated NPC data in the response so the client can update
-              (sceneResult as Record<string, unknown>).generatedNpcAvatars = npcsNeedingAvatars
-                .filter((n) => !!n.avatarUrl)
-                .map((n) => ({ name: n.name as string, avatarUrl: n.avatarUrl as string }));
+              (sceneResult as Record<string, unknown>).generatedNpcAvatars = libResolvedNpcs;
             }
           }
         } catch (genErr) {
