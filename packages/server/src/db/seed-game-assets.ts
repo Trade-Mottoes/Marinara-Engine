@@ -49,44 +49,13 @@ export async function seedDefaultGameAssets(): Promise<void> {
     return;
   }
 
-  // Check if user already has assets (don't overwrite)
-  const hasExistingAssets =
-    existsSync(GAME_ASSETS_DIR) &&
-    readdirSync(GAME_ASSETS_DIR).some(
-      (f) => !f.startsWith(".") && f !== "manifest.json" && statSync(join(GAME_ASSETS_DIR, f)).isDirectory(),
-    );
-
-  // If directories exist but are empty, still seed
-  if (hasExistingAssets) {
-    // Count actual files (not just dirs) to determine if seeded already
-    let fileCount = 0;
-    const categories = ["music", "sfx", "sprites", "backgrounds"];
-    for (const cat of categories) {
-      const catDir = join(GAME_ASSETS_DIR, cat);
-      if (!existsSync(catDir)) continue;
-      try {
-        const scan = (dir: string): number => {
-          let count = 0;
-          for (const e of readdirSync(dir)) {
-            if (e.startsWith(".")) continue;
-            const p = join(dir, e);
-            const s = statSync(p);
-            if (s.isDirectory()) count += scan(p);
-            else count++;
-          }
-          return count;
-        };
-        fileCount += scan(catDir);
-      } catch {
-        /* skip unreadable */
-      }
-    }
-    if (fileCount > 0) return; // User already has assets
-  }
-
+  // copyDirRecursive is idempotent — it skips files that already exist at the
+  // destination. Running on every boot means upgrading users automatically
+  // receive any new bundled assets (e.g. new ambient tracks shipped in a
+  // point release) without overwriting their own additions.
   const copied = copyDirRecursive(BUNDLED_DIR, GAME_ASSETS_DIR);
 
   if (copied > 0) {
-    console.log(`[seed] Installed ${copied} default game asset${copied > 1 ? "s" : ""} (music, SFX, sprites)`);
+    console.log(`[seed] Installed ${copied} default game asset${copied > 1 ? "s" : ""} (music, ambient, SFX, sprites)`);
   }
 }
