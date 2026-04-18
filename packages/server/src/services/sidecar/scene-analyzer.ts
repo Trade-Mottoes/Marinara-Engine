@@ -137,15 +137,14 @@ export function buildSceneAnalyzerUserPrompt(
     `TASK: You are the scene director for a visual novel game. Read the narration above and decide:`,
     // music and ambient are scored deterministically on the server — not requested from the model
     `1. SCENE SETTING — Pick the BEST overall background, weather, and time of day that fit the narration. The top-level "background" is the DEFAULT background for this turn. Change it from the current state only if the scene warrants it (new location, mood shift). Use null to keep unchanged.`,
-    `2. GAME STATE — Set stateChange if the scene transitions (e.g. combat starts, dialogue begins). null if no change.`,
-    `3. REPUTATION — If an NPC relationship shifted, note it. Otherwise empty array.`,
-    `4. PER-BEAT EFFECTS — Scan each narration beat [0]-[${lines.length - 1}]. For each beat you can optionally add:`,
+    `2. REPUTATION — If an NPC relationship shifted, note it. Otherwise empty array.`,
+    `3. PER-BEAT EFFECTS — Scan each narration beat [0]-[${lines.length - 1}]. For each beat you can optionally add:`,
     `   - "sfx": sound effects (door slam, explosion, footsteps, impact)`,
     `   - "background": a DIFFERENT background tag if the characters move to a new location at that beat. The background stays the same until the NEXT segment that changes it, so only set "background" on the beat where characters actually arrive at a new location. Do NOT repeat the current background.`,
     `   Only include segments that HAVE at least one effect — omit empty segments.`,
     ...((ctx?.turnNumber ?? 1) > 1
       ? [
-          `5. CINEMATIC DIRECTIONS — If the narration warrants a visual effect (fade, screen shake, flash, blur, vignette, letterbox, color grade, focus), include it. Otherwise empty array. Available: fade_from_black, fade_to_black, flash, screen_shake, blur, vignette, letterbox, color_grade (presets: warm, cold_blue, horror, noir, vintage, neon, dreamy), focus.`,
+          `4. CINEMATIC DIRECTIONS — If the narration warrants a visual effect (fade, screen shake, flash, blur, vignette, letterbox, color grade, focus), include it. Otherwise empty array. Available: fade_from_black, fade_to_black, flash, screen_shake, blur, vignette, letterbox, color_grade (presets: warm, cold_blue, horror, noir, vintage, neon, dreamy), focus.`,
         ]
       : []),
     ``,
@@ -191,8 +190,6 @@ export function buildSceneAnalyzerUserPrompt(
   parts.push(
     `{`,
     `  "background": "<${bgOptions}>",`,
-
-    `  "stateChange": "<exploration | dialogue | combat | travel_rest | null>",`,
     `  "weather": "<clear | cloudy | foggy | rainy | stormy | snowy | windy | frost | null>",`,
     `  "timeOfDay": "<dawn | morning | noon | afternoon | evening | night | midnight | null>",`,
     `  "reputationChanges": ${reputationHint},`,

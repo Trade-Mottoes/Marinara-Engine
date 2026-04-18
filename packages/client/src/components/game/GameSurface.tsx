@@ -1177,11 +1177,8 @@ export function GameSurface({
 
   function applySceneResult(result: import("@marinara-engine/shared").SceneAnalysis, msg: { id: string }) {
     console.log("[scene-analysis] Result from model:", JSON.stringify(result, null, 2));
-    if (result.stateChange) {
-      // Optimistic local update + persist via server (validates transition, updates chatMeta)
-      useGameModeStore.getState().setGameState(result.stateChange);
-      transitionGameState.mutate({ chatId: activeChatId, newState: result.stateChange });
-    }
+    // NOTE: Game state transitions are owned exclusively by the GM model via [state: ...] tags.
+    // The scene model no longer emits stateChange to avoid conflicting state flips.
 
     // Eagerly patch the game state snapshot so WeatherEffects renders immediately.
     // The mutations below also persist to DB, but may race with snapshot creation.

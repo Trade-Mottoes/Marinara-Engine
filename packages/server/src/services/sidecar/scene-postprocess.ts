@@ -186,7 +186,6 @@ export function postProcessSceneResult(raw: SceneAnalysis, ctx: PostProcessConte
   if (result.ambient === "null") result.ambient = null;
   if (result.weather === "null") result.weather = null;
   if (result.timeOfDay === "null") result.timeOfDay = null;
-  if (result.stateChange === ("null" as any)) result.stateChange = null;
 
   // ── Background ──
   if (result.background && !ctx.availableBackgrounds.includes(result.background)) {

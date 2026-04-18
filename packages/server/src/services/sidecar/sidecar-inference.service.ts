@@ -158,10 +158,6 @@ const SCENE_ANALYSIS_SCHEMA = {
     background: { type: ["string", "null"] as const },
     music: { type: ["string", "null"] as const },
     ambient: { type: ["string", "null"] as const },
-    stateChange: {
-      type: ["string", "null"] as const,
-      enum: ["exploration", "dialogue", "combat", "travel_rest", null],
-    },
     weather: { type: ["string", "null"] as const },
     timeOfDay: { type: ["string", "null"] as const },
     reputationChanges: {
@@ -195,7 +191,6 @@ const SCENE_ANALYSIS_SCHEMA = {
     "background",
     "music",
     "ambient",
-    "stateChange",
     "weather",
     "timeOfDay",
     "reputationChanges",

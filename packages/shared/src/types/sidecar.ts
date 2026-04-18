@@ -72,8 +72,6 @@ export interface SceneAnalysis {
   music: string | null;
   /** Ambient loop tag. */
   ambient: string | null;
-  /** Game state transition — applied immediately. */
-  stateChange: "exploration" | "dialogue" | "combat" | "travel_rest" | null;
   /** Weather description update — applied immediately. */
   weather: string | null;
   /** Time of day update — applied immediately. */
