@@ -540,12 +540,18 @@ export async function gameRoutes(app: FastifyInstance) {
     }
     console.log("[game/setup] === END PROMPT ===");
 
-    const result = await provider.chatComplete(
-      messages,
-      gameGenOptions(conn.model, {
-        maxTokens: 16384,
-      }),
+    const setupOptions = gameGenOptions(conn.model, {
+      maxTokens: 16384,
+    });
+    console.log(
+      "[game/setup] Sending to provider=%s model=%s baseUrl=%s options=%s",
+      conn.provider,
+      conn.model,
+      baseUrl,
+      JSON.stringify(setupOptions),
     );
+
+    const result = await provider.chatComplete(messages, setupOptions);
 
     const responseText = result.content ?? "";
 
@@ -1953,6 +1959,12 @@ export async function gameRoutes(app: FastifyInstance) {
       const enableGen = !!meta.enableSpriteGeneration;
       const imgConnId = (meta.gameImageConnectionId as string) || null;
 
+      if (!enableGen) {
+        console.log("[game/scene-wrap] asset-gen skipped: enableSpriteGeneration=false");
+      } else if (!imgConnId) {
+        console.log("[game/scene-wrap] asset-gen skipped: no gameImageConnectionId configured");
+      }
+
       if (enableGen && imgConnId && parsed && typeof parsed === "object") {
         const sceneResult = parsed as unknown as Record<string, unknown>;
 
@@ -1978,6 +1990,12 @@ export async function gameRoutes(app: FastifyInstance) {
                 Object.keys(manifest.assets).some(
                   (k) => k.startsWith("backgrounds:") && k.toLowerCase().includes(chosenBg.toLowerCase()),
                 );
+
+              if (tagExists) {
+                console.log(`[game/scene-wrap] bg "${chosenBg}" already in manifest, skipping generation`);
+              } else {
+                console.log(`[game/scene-wrap] bg "${chosenBg}" not in manifest, generating…`);
+              }
 
               if (!tagExists) {
                 // The scene model wanted a bg that doesn't exist — generate one
@@ -2108,6 +2126,13 @@ export async function gameRoutes(app: FastifyInstance) {
               }
               (sceneResult as Record<string, unknown>).generatedNpcAvatars = libResolvedNpcs;
             }
+
+            // Count NPCs that still need a portrait so logs make it clear what
+            // the client's follow-up /generate-assets call will (or won't) do.
+            const unresolvedNpcCount = npcs.filter((n) => !n.avatarUrl && n.name).length;
+            console.log(
+              `[game/scene-wrap] asset-gen summary: bg=${chosenBg ?? "none"}, npcs(library-resolved)=${libResolvedNpcs.length}, npcs(deferred to /generate-assets)=${unresolvedNpcCount}`,
+            );
           }
         } catch (genErr) {
           console.warn("[game/scene-wrap] Asset generation error (non-fatal):", genErr);
