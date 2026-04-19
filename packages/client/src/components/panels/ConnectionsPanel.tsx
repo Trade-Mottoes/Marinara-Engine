@@ -50,10 +50,11 @@ function formatBytes(bytes: number): string {
 }
 
 function SidecarCard() {
-  const { status, config, modelSize, setShowDownloadModal, updateConfig, deleteModel, fetchStatus } = useSidecarStore();
-  const isDownloaded = !!config.modelPath;
+  const { status, config, modelDownloaded, modelSize, setShowDownloadModal, updateConfig, deleteModel, fetchStatus } =
+    useSidecarStore();
+  const isDownloaded = modelDownloaded;
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const activeModelName = config.modelPath?.split("/").pop() ?? null;
+  const activeModelName = isDownloaded ? config.modelPath?.split("/").pop() ?? null : null;
 
   // Fetch status on mount (handles HMR store resets and initial load)
   useEffect(() => {

@@ -19,6 +19,7 @@ import { api } from "../lib/api-client.js";
 interface SidecarState {
   status: SidecarStatus;
   config: SidecarConfig;
+  modelDownloaded: boolean;
   runtime: SidecarRuntimeInfo;
   inferenceReady: boolean;
   modelSize: number | null;
@@ -154,6 +155,7 @@ async function consumeDownloadStream(
 export const useSidecarStore = create<SidecarState>((set, get) => ({
   status: "not_downloaded",
   config: { ...SIDECAR_DEFAULT_CONFIG },
+  modelDownloaded: false,
   runtime: { installed: false, build: null, variant: null },
   inferenceReady: false,
   modelSize: null,
@@ -171,6 +173,7 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
       const nextState = {
         status: response.status,
         config: response.config,
+        modelDownloaded: response.modelDownloaded,
         runtime: response.runtime,
         inferenceReady: response.inferenceReady,
         modelSize: response.modelSize,
@@ -279,6 +282,7 @@ export const useSidecarStore = create<SidecarState>((set, get) => ({
       set({
         status: "not_downloaded",
         config: { ...SIDECAR_DEFAULT_CONFIG },
+        modelDownloaded: false,
         inferenceReady: false,
         modelSize: null,
       });
