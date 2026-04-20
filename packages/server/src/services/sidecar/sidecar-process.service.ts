@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import type { SidecarBackend } from "@marinara-engine/shared";
 import { sidecarModelService } from "./sidecar-model.service.js";
 import { isAbortError } from "./sidecar-download.js";
+import { buildLlamaProcessEnv } from "./sidecar-runtime-env.js";
 import { mlxRuntimeService, type MlxRuntimeInstall } from "./mlx-runtime.service.js";
 import { sidecarRuntimeService, type SidecarRuntimeInstall } from "./sidecar-runtime.service.js";
 
@@ -456,6 +457,7 @@ class SidecarProcessService {
 
       const child = spawn(runtime.serverPath, args, {
         cwd: dirname(runtime.serverPath),
+        env: buildLlamaProcessEnv(runtime),
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
