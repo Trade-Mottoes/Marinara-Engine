@@ -52,6 +52,16 @@ export class GoogleProvider extends BaseLLMProvider {
           includeThoughts: true,
         };
       }
+    } else if (supportsThinking) {
+      // Caller didn't request thinking but the model supports it. Gemini's
+      // default is to think aggressively, silently consuming the maxTokens
+      // budget; disable it so maxTokens means output tokens. Gemini 2.5 takes
+      // thinkingBudget: 0; Gemini 3.x only accepts the floor, thinkingLevel: "low".
+      if (isGemini3) {
+        thinkingConfig = { thinkingLevel: "low" };
+      } else {
+        thinkingConfig = { thinkingBudget: 0 };
+      }
     }
 
     // Ensure the base URL includes the /v1beta path segment required by the Gemini API.
@@ -59,10 +69,11 @@ export class GoogleProvider extends BaseLLMProvider {
     let base = this.baseUrl.replace(/\/+$/, "");
     if (!/\/v\d/.test(base)) base += "/v1beta";
 
-    // When thinking is enabled, force non-streaming (generateContent) because
+    // When thinking is active, force non-streaming (generateContent) because
     // proxies like linkapi.ai strip thought parts from SSE streams but return
     // them in non-streaming responses. Text is still yielded so SSE works.
-    const useStreaming = options.stream && !thinkingConfig;
+    const isThinkingActive = !!thinkingConfig?.includeThoughts;
+    const useStreaming = options.stream && !isThinkingActive;
     const endpoint = useStreaming ? "streamGenerateContent" : "generateContent";
     const url = `${base}/models/${model}:${endpoint}${useStreaming ? "?alt=sse" : ""}`;
 
