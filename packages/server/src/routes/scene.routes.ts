@@ -314,6 +314,9 @@ export async function sceneRoutes(app: FastifyInstance) {
       },
     ];
 
+    console.log(
+      `[scene/conclude] chatId=${sceneChatId} connection=${conn.name ?? conn.id} provider=${conn.provider} model=${conn.model} requestedMaxTokens=1024`,
+    );
     const result = await provider.chatComplete(summaryPrompt, {
       model: conn.model,
       temperature: 0.8,
@@ -321,6 +324,9 @@ export async function sceneRoutes(app: FastifyInstance) {
     });
 
     const summary = (result.content ?? "").trim();
+    console.log(
+      `[scene/conclude] response: chars=${summary.length} finishReason=${result.finishReason ?? "(unknown)"} promptTokens=${result.usage?.promptTokens ?? "?"} completionTokens=${result.usage?.completionTokens ?? "?"}`,
+    );
 
     // 1. Inject the summary as a message in the ORIGIN conversation
     const initiatorCharId = sceneMeta.sceneInitiatorCharId ?? characterIds[0] ?? null;
