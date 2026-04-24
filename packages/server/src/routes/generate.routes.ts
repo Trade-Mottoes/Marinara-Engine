@@ -4253,6 +4253,46 @@ export async function generateRoutes(app: FastifyInstance) {
 
         const initialProviderMessages = fitPromptForSend(toProviderMessages(messagesForGen));
 
+        // ── Debug: prompt dumper (untracked diagnostic) ──
+        // Set MARINARA_DUMP_PROMPTS=1 to write each fully-assembled prompt to disk.
+        // Override location with MARINARA_DUMP_DIR (default: ~/marinara-debug/).
+        if (process.env.MARINARA_DUMP_PROMPTS) {
+          try {
+            const fs = await import("fs/promises");
+            const path = await import("path");
+            const os = await import("os");
+            const dumpDir = process.env.MARINARA_DUMP_DIR || path.join(os.homedir(), "marinara-debug");
+            await fs.mkdir(dumpDir, { recursive: true });
+            const ts = new Date().toISOString().replace(/[:.]/g, "-");
+            const file = path.join(dumpDir, `${ts}-${input.chatId.slice(0, 8)}-${chatMode}.json`);
+            await fs.writeFile(
+              file,
+              JSON.stringify(
+                {
+                  timestamp: new Date().toISOString(),
+                  chatId: input.chatId,
+                  chatMode,
+                  presetId: presetId ?? null,
+                  enableAgents: chatEnableAgents,
+                  activeAgentIds: chatActiveAgentIds,
+                  activeLorebookIds: chatActiveLorebookIds,
+                  authorNotes: (chatMeta.authorNotes as string | undefined) ?? null,
+                  authorNotesDepth: (chatMeta.authorNotesDepth as number | undefined) ?? null,
+                  messageCount: initialProviderMessages.length,
+                  effectiveMaxTokens: effectiveMaxTokensForSend,
+                  effectiveMaxContext,
+                  messages: initialProviderMessages,
+                },
+                null,
+                2,
+              ),
+            );
+            console.log(`[debug] Prompt dumped: ${file}`);
+          } catch (e) {
+            console.warn("[debug] Prompt dump failed:", e);
+          }
+        }
+
         // Reset per-character accumulators
         fullResponse = "";
         fullThinking = "";
