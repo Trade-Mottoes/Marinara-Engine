@@ -123,6 +123,7 @@ export function AgentEditor() {
   const [localSourceFileIds, setLocalSourceFileIds] = useState<string[]>([]);
   const [localAutoGenerateAvatars, setLocalAutoGenerateAvatars] = useState(false);
   const [localUseAvatarReferences, setLocalUseAvatarReferences] = useState(false);
+  const [localEnabled, setLocalEnabled] = useState(true);
   const [spotifyStatus, setSpotifyStatus] = useState<{
     connected: boolean;
     expired: boolean;
@@ -170,6 +171,8 @@ export function AgentEditor() {
       setLocalAutoGenerateAvatars(settings.autoGenerateAvatars ?? false);
       setLocalUseAvatarReferences(settings.useAvatarReferences ?? false);
       setLocalPrompt(dbConfig.promptTemplate || "");
+      // dbConfig.enabled is a string ("true"/"false") in the schema.
+      setLocalEnabled(dbConfig.enabled !== "false");
     } else if (builtIn) {
       setLocalName(builtIn.name);
       setLocalDescription(builtIn.description);
@@ -186,6 +189,12 @@ export function AgentEditor() {
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
       setLocalPrompt("");
+      // Built-in with no DB config yet — the panel lists it as enabled
+      // (its card is not dimmed), so default the toggle to match. Historically
+      // this defaulted to `builtIn.enabledByDefault` (false for most agents),
+      // which silently disabled the agent on first Save without the user
+      // realising — the bug this fixes.
+      setLocalEnabled(true);
     } else {
       // Brand new custom agent — start empty
       setLocalName("New Agent");
@@ -203,6 +212,7 @@ export function AgentEditor() {
       setLocalAutoGenerateAvatars(false);
       setLocalUseAvatarReferences(false);
       setLocalPrompt("");
+      setLocalEnabled(true);
     }
     setDirty(false);
     setSaveError(null);
@@ -293,9 +303,9 @@ export function AgentEditor() {
       name: localName,
       description: localDescription,
       phase: localPhase,
-      enabled: true,
       connectionId: localConnectionId || null,
       promptTemplate: localPrompt,
+      enabled: localEnabled,
       settings: {
         ...(localContextSize !== "" ? { contextSize: Number(localContextSize) } : {}),
         ...(localRunInterval !== "" ? { runInterval: Number(localRunInterval) } : {}),
@@ -353,6 +363,7 @@ export function AgentEditor() {
     localSourceFileIds,
     localAutoGenerateAvatars,
     localUseAvatarReferences,
+    localEnabled,
     dbConfig,
     builtIn,
     updateAgent,
@@ -435,6 +446,24 @@ export function AgentEditor() {
             </span>
           )}
           {dirty && !saveError && <span className="mr-2 text-[0.625rem] font-medium text-amber-400">Unsaved</span>}
+          {/* Enable/Disable toggle — matches the title-bar pattern established by RegexScriptEditor. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={localEnabled}
+            onClick={() => {
+              setLocalEnabled((v) => !v);
+              markDirty();
+            }}
+            className="flex items-center gap-1 rounded-xl px-2 py-2 text-xs font-medium transition-all hover:bg-[var(--accent)]"
+            title={localEnabled ? "Enabled — click to disable" : "Disabled — click to enable"}
+          >
+            {localEnabled ? (
+              <ToggleRight size="1.125rem" className="text-emerald-400" />
+            ) : (
+              <ToggleLeft size="1.125rem" className="text-[var(--muted-foreground)]" />
+            )}
+          </button>
           {isCustomAgent && dbConfig && (
             <button
               onClick={handleDelete}

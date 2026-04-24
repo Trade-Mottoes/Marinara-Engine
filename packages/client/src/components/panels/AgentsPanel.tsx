@@ -2,9 +2,28 @@
 // Panel: Agents & Tools
 // ──────────────────────────────────────────────
 import { useState } from "react";
-import { Sparkles, Pencil, Plus, Wrench, ChevronDown, Trash2, Regex, PenLine, Radar, Puzzle } from "lucide-react";
+import {
+  Sparkles,
+  Pencil,
+  Plus,
+  Wrench,
+  ChevronDown,
+  Trash2,
+  Regex,
+  PenLine,
+  Radar,
+  Puzzle,
+  ToggleLeft,
+  ToggleRight,
+} from "lucide-react";
 import { useUIStore } from "../../stores/ui.store";
-import { useAgentConfigs, useDeleteAgent, type AgentConfigRow } from "../../hooks/use-agents";
+import {
+  useAgentConfigs,
+  useDeleteAgent,
+  useToggleAgent,
+  useUpdateAgent,
+  type AgentConfigRow,
+} from "../../hooks/use-agents";
 import { useCustomTools, useDeleteCustomTool, type CustomToolRow } from "../../hooks/use-custom-tools";
 import {
   useRegexScripts,
@@ -21,6 +40,8 @@ export function AgentsPanel() {
   const { data: customTools } = useCustomTools();
   const { data: regexScripts } = useRegexScripts();
   const deleteAgent = useDeleteAgent();
+  const toggleAgent = useToggleAgent();
+  const updateAgent = useUpdateAgent();
   const deleteTool = useDeleteCustomTool();
   const deleteRegex = useDeleteRegexScript();
   const openAgentDetail = useUIStore((s) => s.openAgentDetail);
@@ -108,16 +129,25 @@ export function AgentsPanel() {
       category: agent.category,
       enabled: configByType.get(agent.id)?.enabled !== "false",
       custom: false,
+      onToggle: () => toggleAgent.mutate(agent.id),
+      toggling: toggleAgent.isPending && toggleAgent.variables === agent.id,
     })),
-    ...customAgents.map((agent) => ({
-      id: agent.id,
-      type: agent.type,
-      name: agent.name,
-      description: agent.description,
-      category: "custom" as const,
-      enabled: agent.enabled !== "false",
-      custom: true,
-    })),
+    ...customAgents.map((agent) => {
+      const enabled = agent.enabled !== "false";
+      return {
+        id: agent.id,
+        type: agent.type,
+        name: agent.name,
+        description: agent.description,
+        category: "custom" as const,
+        enabled,
+        custom: true,
+        onToggle: () => updateAgent.mutate({ id: agent.id, enabled: enabled ? "false" : "true" }),
+        toggling:
+          updateAgent.isPending &&
+          (updateAgent.variables as { id?: string } | undefined)?.id === agent.id,
+      };
+    }),
   ];
 
   const activeAgents = statusAgents.filter((agent) => agent.enabled);
@@ -318,6 +348,8 @@ export function AgentsPanel() {
                       enabled: configByType.get(agent.id)?.enabled !== "false",
                       custom: false,
                       openAgentDetail,
+                      onToggle: () => toggleAgent.mutate(agent.id),
+                      toggling: toggleAgent.isPending && toggleAgent.variables === agent.id,
                     }),
                   )
                 )}
@@ -368,15 +400,36 @@ export function AgentsPanel() {
             <p className="text-[0.625rem] text-[var(--muted-foreground)] px-1 py-2">No custom agents yet.</p>
           ) : (
             customAgents.map((agent) => {
+              const enabled = agent.enabled !== "false";
+              const toggling =
+                updateAgent.isPending &&
+                (updateAgent.variables as { id?: string } | undefined)?.id === agent.id;
               return (
                 <div
                   key={agent.id}
                   className={cn(
                     "flex items-start gap-2.5 rounded-lg p-2 transition-colors hover:bg-[var(--sidebar-accent)]",
-                    agent.enabled === "false" && "opacity-55",
+                    !enabled && "opacity-55",
                   )}
                 >
-                  <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enabled}
+                    disabled={toggling}
+                    title={enabled ? "Enabled — click to disable" : "Disabled — click to enable"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updateAgent.mutate({ id: agent.id, enabled: enabled ? "false" : "true" });
+                    }}
+                    className="mt-0.5 shrink-0 rounded transition-colors disabled:cursor-wait disabled:opacity-50 hover:bg-[var(--accent)]"
+                  >
+                    {enabled ? (
+                      <ToggleRight size="1rem" className="text-emerald-400" />
+                    ) : (
+                      <ToggleLeft size="1rem" className="text-[var(--muted-foreground)]" />
+                    )}
+                  </button>
                   <button className="min-w-0 flex-1 text-left" onClick={() => openAgentDetail(agent.id)}>
                     <div className="text-xs font-medium font-mono">{agent.name}</div>
                     <div className="text-[0.625rem] text-[var(--muted-foreground)] line-clamp-2">
@@ -492,6 +545,8 @@ function renderAgentCard({
   enabled,
   custom,
   openAgentDetail,
+  onToggle,
+  toggling,
 }: {
   id: string;
   type: string;
@@ -501,6 +556,8 @@ function renderAgentCard({
   enabled: boolean;
   custom: boolean;
   openAgentDetail: (id: string) => void;
+  onToggle?: () => void;
+  toggling?: boolean;
 }) {
   void enabled;
 
@@ -509,7 +566,28 @@ function renderAgentCard({
       key={id}
       className="flex items-start gap-2.5 rounded-lg p-2 transition-colors hover:bg-[var(--sidebar-accent)]"
     >
-      <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
+      {onToggle ? (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          disabled={!!toggling}
+          title={enabled ? "Enabled — click to disable" : "Disabled — click to enable"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          className="mt-0.5 shrink-0 rounded transition-colors disabled:cursor-wait disabled:opacity-50 hover:bg-[var(--accent)]"
+        >
+          {enabled ? (
+            <ToggleRight size="1rem" className="text-emerald-400" />
+          ) : (
+            <ToggleLeft size="1rem" className="text-[var(--muted-foreground)]" />
+          )}
+        </button>
+      ) : (
+        <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
+      )}
       <button className="min-w-0 flex-1 text-left" onClick={() => openAgentDetail(custom ? id : type)}>
         <div className="truncate text-xs font-medium font-mono">{name}</div>
         <div className="mt-0.5 text-[0.625rem] text-[var(--muted-foreground)] line-clamp-2">
