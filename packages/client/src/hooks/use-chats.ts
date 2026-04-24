@@ -1,7 +1,14 @@
 // ──────────────────────────────────────────────
 // React Query: Chat hooks
 // ──────────────────────────────────────────────
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useMutationState,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { api } from "../lib/api-client";
 import { useChatStore } from "../stores/chat.store";
 import { useAgentStore } from "../stores/agent.store";
@@ -369,16 +376,42 @@ export function useBranchChat() {
   });
 }
 
+/** Shared mutation key for summary generation — used by useIsSummaryGenerating. */
+const GENERATE_SUMMARY_KEY = ["generate-summary"] as const;
+
 /** Generate a rolling summary for a chat via the LLM */
 export function useGenerateSummary() {
   const qc = useQueryClient();
   return useMutation({
+    // Tagged with a stable key so any component can observe pending generations
+    // across dialog remounts via useIsSummaryGenerating(chatId).
+    mutationKey: GENERATE_SUMMARY_KEY,
     mutationFn: ({ chatId, contextSize }: { chatId: string; contextSize?: number }) =>
       api.post<{ summary: string }>(`/chats/${chatId}/generate-summary`, { contextSize }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: chatKeys.detail(vars.chatId) });
     },
   });
+}
+
+/**
+ * Returns true if a summary generation is currently in-flight for the given chat,
+ * regardless of which component started it. Survives dialog close/reopen so the
+ * UI can reflect ongoing background work.
+ */
+export function useIsSummaryGenerating(chatId: string | null): boolean {
+  const pending = useMutationState({
+    filters: {
+      mutationKey: GENERATE_SUMMARY_KEY,
+      status: "pending",
+      predicate: (m) => {
+        if (!chatId) return false;
+        const vars = m.state.variables as { chatId?: string } | undefined;
+        return vars?.chatId === chatId;
+      },
+    },
+  });
+  return pending.length > 0;
 }
 
 /** Clear all user data */

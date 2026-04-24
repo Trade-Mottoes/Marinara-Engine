@@ -27,9 +27,11 @@ import {
   FlipHorizontal2,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { Modal } from "../ui/Modal";
 import { useUIStore } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { useGameStateStore } from "../../stores/game-state.store";
+import { useIsSummaryGenerating } from "../../hooks/use-chats";
 import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
@@ -72,9 +74,9 @@ const EncounterModal = lazy(async () => {
   return { default: module.EncounterModal };
 });
 
-const SummaryPopover = lazy(async () => {
-  const module = await import("./SummaryPopover");
-  return { default: module.SummaryPopover };
+const SummaryDialog = lazy(async () => {
+  const module = await import("./SummaryDialog");
+  return { default: module.SummaryDialog };
 });
 
 const WorldInfoPanel = lazy(async () => {
@@ -311,29 +313,45 @@ function SummaryButton({
 }) {
   const [open, setOpen] = useState(false);
   const compact = useUIStore((s) => s.centerCompact);
+  const isGenerating = useIsSummaryGenerating(chatId);
 
   if (!chatId) return null;
 
   return (
-    <div className="relative" onClick={(e) => e.stopPropagation()}>
+    <>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen(true)}
         className={cn(
-          "flex items-center justify-center rounded-full border backdrop-blur-md transition-all",
+          "relative flex items-center justify-center rounded-full border backdrop-blur-md transition-all",
           compact ? "p-1" : "p-1.5",
           open
             ? "bg-foreground/15 border-foreground/20 text-foreground/90"
             : summary
               ? "bg-foreground/10 border-foreground/25 text-foreground/80 hover:bg-foreground/15 hover:text-foreground"
               : "bg-foreground/5 border-foreground/10 text-foreground/60 hover:bg-foreground/10 hover:text-foreground",
+          isGenerating && "ring-2 ring-amber-400/60",
         )}
-        title="Chat Summary"
+        title={isGenerating ? "Chat Summary (generating…)" : "Chat Summary"}
+        aria-busy={isGenerating}
       >
         <ScrollText size="0.875rem" />
+        {isGenerating && (
+          <span className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-400" />
+          </span>
+        )}
       </button>
-      {open && (
-        <Suspense fallback={null}>
-          <SummaryPopover
+      <Modal open={open} onClose={() => setOpen(false)} title="Chat Summary" width="max-w-lg">
+        <Suspense
+          fallback={
+            <div className="flex items-center gap-2 py-4 text-xs text-[var(--muted-foreground)]">
+              <Loader2 size="0.75rem" className="animate-spin" />
+              Loading summary…
+            </div>
+          }
+        >
+          <SummaryDialog
             chatId={chatId}
             summary={summary}
             contextSize={summaryContextSize}
@@ -341,8 +359,8 @@ function SummaryButton({
             onClose={() => setOpen(false)}
           />
         </Suspense>
-      )}
-    </div>
+      </Modal>
+    </>
   );
 }
 
