@@ -137,12 +137,34 @@ export class GoogleProvider extends BaseLLMProvider {
     // ── Non-streaming path (also used when thinking is enabled) ──
     if (!useStreaming) {
       const json = (await response.json()) as {
-        candidates: Array<{
-          content: { parts: GeminiPart[] };
+        candidates?: Array<{
+          content?: { parts?: GeminiPart[] };
+          finishReason?: string;
         }>;
+        promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
         usageMetadata?: { promptTokenCount: number; candidatesTokenCount: number; totalTokenCount: number };
       };
-      const parts = json.candidates[0]?.content?.parts ?? [];
+
+      // Gemini omits `candidates` entirely when the safety system blocks the
+      // prompt or response. Surface the block reason so callers can adjust.
+      if (!json.candidates?.length) {
+        const reason = json.promptFeedback?.blockReason;
+        const detail = json.promptFeedback?.blockReasonMessage;
+        if (reason) {
+          throw new Error(
+            `Gemini blocked the request${detail ? ` (${reason}: ${detail})` : ` (${reason})`}. Try a more permissive model or adjust the prompt.`,
+          );
+        }
+        throw new Error("Gemini returned no candidates and no block reason — empty response.");
+      }
+
+      // A candidate can also be present but content-less when truncated for
+      // a non-block reason — surface its finishReason for visibility.
+      const candidate = json.candidates[0]!;
+      const parts = candidate.content?.parts ?? [];
+      if (parts.length === 0 && candidate.finishReason && candidate.finishReason !== "STOP") {
+        throw new Error(`Gemini returned no content (finishReason=${candidate.finishReason}).`);
+      }
 
       // Report full parts (with thought signatures) for storage
       if (options.onResponseParts) options.onResponseParts(parts);
