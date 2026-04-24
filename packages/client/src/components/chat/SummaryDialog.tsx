@@ -1,66 +1,168 @@
 // ──────────────────────────────────────────────
-// Summary Dialog — view/edit/generate the rolling chat summary
-// Rendered inside a shared Modal (see SummaryButton in ChatRoleplaySurface).
+// Summary surfaces — peek (read-only, allows Generate) + dialog (editor).
+// Rendered by SummaryButton in ChatRoleplaySurface.
 // ──────────────────────────────────────────────
 import { useEffect, useState } from "react";
-import { Loader2, Save, Sparkles } from "lucide-react";
+import { Loader2, PenLine, Save, ScrollText, Sparkles, X } from "lucide-react";
 import { useGenerateSummary, useIsSummaryGenerating, useUpdateChatMetadata } from "../../hooks/use-chats";
 import { cn } from "../../lib/utils";
 
-interface SummaryDialogProps {
+// ════════════════════════════════════════════════════════════════════════════
+// SummaryPeek — read-only preview with Generate access
+// ════════════════════════════════════════════════════════════════════════════
+
+interface SummaryPeekProps {
   chatId: string;
   summary: string | null;
   contextSize: number;
   onContextSizeChange: (size: number) => void;
+  onEdit: () => void;
   onClose: () => void;
+  isMobile: boolean;
 }
 
-export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChange, onClose }: SummaryDialogProps) {
-  const propsSummary = summary ?? "";
-  const [draft, setDraft] = useState(propsSummary);
+/**
+ * Transient popover for the chat summary. Intent: quick peek at what's
+ * there, with the ability to fire a Generate without committing to a full
+ * edit session. Editing happens in SummaryDialog (reached via the Edit
+ * button). Because this surface does no mutation to local state, the
+ * outside-click / Escape dismissal that would lose typing in an editor is
+ * harmless here.
+ */
+export function SummaryPeek({
+  chatId,
+  summary,
+  contextSize,
+  onContextSizeChange,
+  onEdit,
+  onClose,
+  isMobile,
+}: SummaryPeekProps) {
+  const text = (summary ?? "").trim();
   const [contextSizeStr, setContextSizeStr] = useState(String(contextSize || 50));
-  const updateMeta = useUpdateChatMetadata();
   const generateSummary = useGenerateSummary();
-
-  // Explicit save semantics. `isDirty` is the single source of truth for
-  // "user has pending edits" — it gates the prop-sync effect (so an external
-  // refetch doesn't clobber typing) and controls the Save button's disabled
-  // state. Closing via X / backdrop / Escape / Cancel discards edits.
-  const isDirty = draft !== propsSummary;
-
-  // Sync draft from props only when NOT dirty — lets external edits (other
-  // tab, chat-summary agent) land on first view, while respecting pending
-  // user edits. To discard local edits and accept the server value, use
-  // the Cancel button.
-  useEffect(() => {
-    if (isDirty) return;
-    setDraft(propsSummary);
-    // isDirty intentionally omitted — we only want to react to prop changes,
-    // and its value is read imperatively via closure.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [propsSummary]);
-
-  // ── Generate ────────────────────────────────────────────────────────────
-  // Cross-component signal: true whenever ANY pending generate-summary mutation
-  // exists for this chat — so reopening the dialog after closing during a
-  // generation correctly reflects ongoing work. `generateSummary.isPending`
-  // alone would only be true for the mutation owned by this dialog instance.
   const isGenerating = useIsSummaryGenerating(chatId) || generateSummary.isPending;
+
+  const effectiveContextSize = Math.max(5, Math.min(200, parseInt(contextSizeStr, 10) || 50));
 
   const handleGenerate = () => {
     if (isGenerating) return;
-    generateSummary.mutate(
-      { chatId, contextSize },
-      {
-        onSuccess: (data) => {
-          // Replace the draft with the freshly generated summary. The server
-          // already persisted it (append semantics), so no client-side save
-          // is needed — the next prop sync will match and clear isDirty.
-          setDraft(data.summary);
-        },
-      },
-    );
+    generateSummary.mutate({ chatId, contextSize });
   };
+
+  return (
+    <>
+      {/* Header: title · context size · Generate · (mobile close) */}
+      <div className="mb-2 flex items-center gap-1.5">
+        <h3 className="flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
+          <ScrollText size="0.75rem" className="text-amber-400" />
+          Chat Summary
+        </h3>
+        <div className="ml-auto flex items-center gap-1.5">
+          <input
+            type="number"
+            min={5}
+            max={200}
+            value={contextSizeStr}
+            onChange={(e) => setContextSizeStr(e.target.value.replace(/[^0-9]/g, ""))}
+            onBlur={() => {
+              const clamped = effectiveContextSize;
+              setContextSizeStr(String(clamped));
+              onContextSizeChange(clamped);
+            }}
+            disabled={isGenerating}
+            title="How many recent messages to feed the generator"
+            className="w-12 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-1.5 py-0.5 text-center text-[0.625rem] text-[var(--foreground)] outline-none transition-colors [appearance:textfield] focus:ring-2 focus:ring-[var(--ring)] disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          />
+          <button
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            className="flex items-center gap-1 rounded-md bg-gradient-to-r from-amber-400 to-orange-500 px-2 py-0.5 text-[0.625rem] font-medium text-white shadow-sm transition-all hover:shadow-md active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 disabled:shadow-none disabled:active:scale-100"
+          >
+            {isGenerating ? (
+              <Loader2 size="0.625rem" className="animate-spin" />
+            ) : (
+              <Sparkles size="0.625rem" />
+            )}
+            {isGenerating ? "Generating…" : "Generate"}
+          </button>
+          {isMobile && (
+            <button
+              onClick={onClose}
+              className="rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            >
+              <X size="0.75rem" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* In-flight banner — compact, reassures the user that closing is safe. */}
+      {isGenerating && (
+        <div className="mb-2 flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-[0.625rem] text-amber-200">
+          <Loader2 size="0.625rem" className="animate-spin" />
+          Running in background; result will appear here.
+        </div>
+      )}
+
+      {/* Body: read-only summary or empty state */}
+      {text ? (
+        <div className="mb-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--secondary)] px-2.5 py-2 text-xs leading-relaxed text-[var(--foreground)]/90">
+          {text}
+        </div>
+      ) : (
+        <p className="mb-2 rounded-lg bg-[var(--secondary)]/50 py-4 text-center text-xs italic text-[var(--muted-foreground)]">
+          No summary yet. Generate one above or click Edit to write it.
+        </p>
+      )}
+
+      {/* Footer: small Edit button. Muted on purpose — Generate is the
+          visual primary action in the peek; Edit is a mode transition. */}
+      <div className="flex justify-end border-t border-[var(--border)]/40 pt-2">
+        <button
+          onClick={onEdit}
+          className="flex items-center gap-1 rounded-md px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+        >
+          <PenLine size="0.625rem" />
+          Edit
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SummaryDialog — committed editor. Generate lives in the peek, not here.
+// ════════════════════════════════════════════════════════════════════════════
+
+interface SummaryDialogProps {
+  chatId: string;
+  summary: string | null;
+  onClose: () => void;
+}
+
+export function SummaryDialog({ chatId, summary, onClose }: SummaryDialogProps) {
+  const propsSummary = summary ?? "";
+  const [draft, setDraft] = useState(propsSummary);
+  const updateMeta = useUpdateChatMetadata();
+  const generateSummary = useGenerateSummary();
+
+  // Explicit save semantics. `isDirty` gates the prop-sync effect (so external
+  // refetches don't clobber typing) and controls the Save button.
+  const isDirty = draft !== propsSummary;
+
+  useEffect(() => {
+    if (isDirty) return;
+    setDraft(propsSummary);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [propsSummary]);
+
+  // A generation triggered from the peek may complete while the dialog is
+  // open. When it does, React Query invalidates chat detail → propsSummary
+  // updates → the effect above syncs draft (because not dirty). If the user
+  // IS dirty, they keep their edits and can choose to Save or Cancel to
+  // pick up the new server value.
+  const isGenerating = useIsSummaryGenerating(chatId) || generateSummary.isPending;
 
   const handleSave = () => {
     if (!isDirty || isGenerating) return;
@@ -73,22 +175,18 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
   };
 
   const handleCancel = () => {
-    // Revert any pending edits before closing. Prevents the "did my draft
-    // just get lost?" surprise — explicit intent.
-    setDraft(propsSummary);
+    setDraft(propsSummary); // revert
     onClose();
   };
 
   const wordCount = draft.trim() ? draft.trim().split(/\s+/).length : 0;
   const charCount = draft.length;
-  const effectiveContextSize = Math.max(5, Math.min(200, parseInt(contextSizeStr, 10) || 50));
   const saveDisabled = !isDirty || isGenerating || updateMeta.isPending;
 
   return (
     <div className="space-y-4">
-      {/* In-flight generation banner — shown on dialog open/reopen while a
-          mutation is still running. Edits are disabled here because the
-          server-side handler appends to chat metadata on completion, which
+      {/* Banner when a background generation is in flight. Editing is
+          disabled here because the server appends on completion, which
           would overwrite anything typed in the meantime. */}
       {isGenerating && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
@@ -97,7 +195,7 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
             <p className="font-medium">Generating a new summary…</p>
             <p className="text-[0.6875rem] text-amber-200/80">
               Editing is disabled until this finishes. You can close this dialog — generation will continue in the
-              background and the result will appear here when you reopen it.
+              background.
             </p>
           </div>
         </div>
@@ -120,7 +218,7 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
           id="summary-text"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Write a summary of this chat, or generate one from recent messages."
+          placeholder="Write a summary of this chat."
           rows={10}
           readOnly={isGenerating}
           aria-busy={isGenerating}
@@ -130,66 +228,13 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
           )}
         />
         <p className="text-[0.625rem] text-[var(--muted-foreground)]/70">
-          Injected into every prompt at the chat-summary marker.
+          Injected into every prompt at the chat-summary marker. Use Generate from the peek view to append an
+          AI-written paragraph.
         </p>
       </div>
 
-      {/* Generate */}
-      <div className="space-y-2 border-t border-[var(--border)]/40 pt-3">
-        <label className="text-xs font-medium text-[var(--foreground)]">
-          Auto-generate from recent messages
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min={5}
-            max={200}
-            value={contextSizeStr}
-            onChange={(e) => setContextSizeStr(e.target.value.replace(/[^0-9]/g, ""))}
-            onBlur={() => {
-              const clamped = effectiveContextSize;
-              setContextSizeStr(String(clamped));
-              onContextSizeChange(clamped);
-            }}
-            disabled={isGenerating}
-            className="w-16 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-center text-xs text-[var(--foreground)] outline-none transition-colors [appearance:textfield] focus:ring-2 focus:ring-[var(--ring)] disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-          />
-          <span className="flex-1 text-[0.6875rem] text-[var(--muted-foreground)]">recent messages</span>
-          <button
-            onClick={handleGenerate}
-            disabled={isGenerating}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all",
-              "bg-gradient-to-r from-amber-400 to-orange-500 text-white shadow-sm",
-              "hover:shadow-md active:scale-[0.98]",
-              "disabled:cursor-wait disabled:opacity-60 disabled:shadow-none disabled:active:scale-100",
-            )}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 size="0.75rem" className="animate-spin" />
-                Generating…
-              </>
-            ) : (
-              <>
-                <Sparkles size="0.75rem" />
-                Generate
-              </>
-            )}
-          </button>
-        </div>
-        <p className="text-[0.625rem] text-[var(--muted-foreground)]/70">
-          Appends a new paragraph covering the last {effectiveContextSize} messages to the summary above. Saves
-          immediately.
-        </p>
-      </div>
-
-      {/* Footer actions — compact Cancel + gradient Save, matching the
-          minimal aesthetic of the original SummaryPopover and the Lorebook
-          family of edit surfaces. Save is deliberately small and gradient-
-          branded rather than using --primary, to stay consistent with the
-          amber Generate button above and the app-wide convention for
-          "summary / lorebook / AI content" action buttons. */}
+      {/* Footer — compact Cancel + gradient Save, matching the original's
+          minimal aesthetic and the Summary/Lorebook/AI family. */}
       <div className="flex items-center justify-end gap-1.5 border-t border-[var(--border)]/40 pt-3">
         <button
           onClick={handleCancel}
