@@ -10,6 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { logger } from "../lib/logger.js";
 import { readdirSync, existsSync } from "fs";
 import { join, extname } from "path";
+import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
@@ -68,6 +69,41 @@ async function resolveConnection(
   if (!baseUrl) throw new Error("No base URL configured for this connection");
 
   return { conn, baseUrl };
+}
+
+/**
+ * Resolve the connection for a UTILITY task — scene summary, scene plan
+ * generation, or any background LLM work that's conceptually agent-flavoured
+ * rather than chat-flavoured.
+ *
+ * Resolution order matches `chats.routes.ts /generate-summary`:
+ *   1. Per-call override (req.body.connectionId)
+ *   2. Chat-summary agent's own connection override
+ *   3. Default-for-agents connection
+ *   4. The chat's active connection (last resort, what resolveConnection used to do)
+ *
+ * Without this, scene/conclude was inheriting the scene chat's connection at
+ * scene-create time and using whatever model the user picked for creative
+ * roleplay — often a thinking-heavy or NSFW-restricted model that's a poor
+ * fit for utility summarisation. Users had set "default for all agents" to
+ * a small/local model expecting it to apply here too.
+ */
+async function resolveUtilityConnection(
+  connections: ReturnType<typeof createConnectionsStorage>,
+  agentsStore: ReturnType<typeof createAgentsStorage>,
+  connId: string | null | undefined,
+  chatConnectionId: string | null,
+) {
+  if (!connId) {
+    const summaryAgentCfg = await agentsStore.getByType("chat-summary");
+    if (summaryAgentCfg?.connectionId) {
+      connId = summaryAgentCfg.connectionId;
+    } else {
+      const defaultAgentConn = await connections.getDefaultForAgents();
+      if (defaultAgentConn?.id) connId = defaultAgentConn.id;
+    }
+  }
+  return resolveConnection(connections, connId, chatConnectionId);
 }
 
 async function buildCharacterContext(chars: ReturnType<typeof createCharactersStorage>, characterIds: string[]) {
@@ -137,6 +173,7 @@ export async function sceneRoutes(app: FastifyInstance) {
   const connections = createConnectionsStorage(app.db);
   const chars = createCharactersStorage(app.db);
   const gsStorage = createGameStateStorage(app.db);
+  const agentsStore = createAgentsStorage(app.db);
 
   // ───────────────────────── CREATE ─────────────────────────
   // Creates a new roleplay chat for the scene using the full plan,
@@ -256,8 +293,18 @@ export async function sceneRoutes(app: FastifyInstance) {
     const originChatId = sceneMeta.sceneOriginChatId;
     if (!originChatId) return reply.status(400).send({ error: "Not a scene chat (no origin)" });
 
-    // Resolve connection
-    const { conn, baseUrl } = await resolveConnection(connections, connectionId, sceneChat.connectionId);
+    // Resolve connection — utility-task chain (chat-summary agent override
+    // → default-for-agents → scene chat's connection). See
+    // resolveUtilityConnection above for rationale.
+    const { conn, baseUrl } = await resolveUtilityConnection(
+      connections,
+      agentsStore,
+      connectionId,
+      sceneChat.connectionId,
+    );
+    console.log(
+      `[scene/conclude] using connection=${conn.name ?? conn.id} provider=${conn.provider} model=${conn.model}`,
+    );
     const provider = createLLMProvider(
       conn.provider,
       baseUrl,
