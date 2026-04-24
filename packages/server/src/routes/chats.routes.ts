@@ -1214,15 +1214,19 @@ export async function chatsRoutes(app: FastifyInstance) {
     const connections = createConnectionsStorage(app.db);
 
     // Model resolution chain:
-    // 1. Chat Summary agent's own connection override
+    // 1. Chat Summary agent's own connection override (only if the agent
+    //    is enabled — a disabled agent's stale connectionId shouldn't
+    //    silently override the user's "default for all agents" setting)
     // 2. Default-for-agents connection
     // 3. Chat's active connection
     const { createAgentsStorage } = await import("../services/storage/agents.storage.js");
     const agentsStore = createAgentsStorage(app.db);
     const summaryAgentCfg = await agentsStore.getByType("chat-summary");
+    const summaryAgentEnabled = summaryAgentCfg?.enabled !== "false";
     const defaultAgentConn = await connections.getDefaultForAgents();
 
-    let resolvedConnId: string | null = summaryAgentCfg?.connectionId ?? defaultAgentConn?.id ?? null;
+    let resolvedConnId: string | null =
+      (summaryAgentEnabled ? (summaryAgentCfg?.connectionId ?? null) : null) ?? defaultAgentConn?.id ?? null;
 
     // Fall back to the chat connection
     if (!resolvedConnId) {

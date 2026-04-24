@@ -95,8 +95,16 @@ async function resolveUtilityConnection(
   chatConnectionId: string | null,
 ) {
   if (!connId) {
+    // Skip the chat-summary agent's connection if the agent is disabled —
+    // a disabled agent's connection setting is stale/forgotten config and
+    // shouldn't silently override the user's "default for all agents".
+    // This was a real footgun: a user disables the chat-summary agent to
+    // stop auto-summaries, then later sets default-for-agents to LM Studio,
+    // expecting summary tasks to route there. Without this guard, the
+    // disabled agent's old Gemini connectionId still wins.
     const summaryAgentCfg = await agentsStore.getByType("chat-summary");
-    if (summaryAgentCfg?.connectionId) {
+    const summaryAgentEnabled = summaryAgentCfg?.enabled !== "false";
+    if (summaryAgentEnabled && summaryAgentCfg?.connectionId) {
       connId = summaryAgentCfg.connectionId;
     } else {
       const defaultAgentConn = await connections.getDefaultForAgents();
