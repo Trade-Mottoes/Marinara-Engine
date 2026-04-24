@@ -962,12 +962,18 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
     [chat.id, updateChat],
   );
 
-  // Auto-select the default preset for new chats
+  // Auto-select the default preset for new chats — except in conversation mode,
+  // where the server uses a built-in DM-style system prompt and runs day/week
+  // auto-summarisation (gated on `!presetId` in generate.routes.ts). Silently
+  // assigning a preset here turned conversations into preset-driven chats,
+  // disabling the DM prompt + summarisation without the user knowing why.
+  // Conversation chats stay preset-less unless the user explicitly assigns one.
   useEffect(() => {
+    if (chat.mode === "conversation") return;
     if (!chat.promptPresetId && defaultPreset?.id) {
       updateChat.mutate({ id: chat.id, promptPresetId: defaultPreset.id });
     }
-  }, [defaultPreset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [defaultPreset?.id, chat.mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setPersona = useCallback(
     (personaId: string | null) => {
