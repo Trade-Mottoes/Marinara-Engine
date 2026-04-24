@@ -2,8 +2,8 @@
 // Summary Dialog — view/edit/generate the rolling chat summary
 // Rendered inside a shared Modal (see SummaryButton in ChatRoleplaySurface).
 // ──────────────────────────────────────────────
-import { useEffect, useRef, useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, Save, Sparkles } from "lucide-react";
 import { useGenerateSummary, useIsSummaryGenerating, useUpdateChatMetadata } from "../../hooks/use-chats";
 import { cn } from "../../lib/utils";
 
@@ -22,52 +22,23 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
   const updateMeta = useUpdateChatMetadata();
   const generateSummary = useGenerateSummary();
 
-  // ── Race-proof autosave (matches AuthorNotesPanel) ──────────────────────
-  // Tracks the last value we persisted so a server round-trip echo doesn't
-  // clobber in-flight typing.
-  const lastSavedRef = useRef(propsSummary);
-  // Live ref so the unmount cleanup sees the freshest draft.
-  const draftRef = useRef(draft);
-  useEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
-  // Stable mutate handle for the unmount path.
-  const mutateRef = useRef(updateMeta.mutate);
-  useEffect(() => {
-    mutateRef.current = updateMeta.mutate;
-  });
+  // Explicit save semantics. `isDirty` is the single source of truth for
+  // "user has pending edits" — it gates the prop-sync effect (so an external
+  // refetch doesn't clobber typing) and controls the Save button's disabled
+  // state. Closing via X / backdrop / Escape / Cancel discards edits.
+  const isDirty = draft !== propsSummary;
 
-  // Sync from props only when an external change genuinely differs from the
-  // last value we saved. Lets external edits (other tab, agent) land while
-  // protecting current keystrokes from being overwritten by our own echoes.
+  // Sync draft from props only when NOT dirty — lets external edits (other
+  // tab, chat-summary agent) land on first view, while respecting pending
+  // user edits. To discard local edits and accept the server value, use
+  // the Cancel button.
   useEffect(() => {
-    if (propsSummary !== lastSavedRef.current) {
-      setDraft(propsSummary);
-      lastSavedRef.current = propsSummary;
-    }
+    if (isDirty) return;
+    setDraft(propsSummary);
+    // isDirty intentionally omitted — we only want to react to prop changes,
+    // and its value is read imperatively via closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [propsSummary]);
-
-  // Debounced autosave.
-  useEffect(() => {
-    if (draft === lastSavedRef.current) return;
-    const t = setTimeout(() => {
-      lastSavedRef.current = draft;
-      mutateRef.current({ id: chatId, summary: draft.trim() ? draft : null });
-    }, 400);
-    return () => clearTimeout(t);
-  }, [draft, chatId]);
-
-  // Safety net: flush any pending edit when the dialog unmounts before the
-  // debounce timer fires (closing via X / backdrop / Escape / Done).
-  useEffect(() => {
-    return () => {
-      const live = draftRef.current;
-      if (live !== lastSavedRef.current) {
-        lastSavedRef.current = live;
-        mutateRef.current({ id: chatId, summary: live.trim() ? live : null });
-      }
-    };
-  }, [chatId]);
 
   // ── Generate ────────────────────────────────────────────────────────────
   // Cross-component signal: true whenever ANY pending generate-summary mutation
@@ -83,21 +54,35 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
       {
         onSuccess: (data) => {
           // Replace the draft with the freshly generated summary. The server
-          // already persisted it, so update lastSavedRef to suppress a
-          // redundant follow-up write from the autosave effect. If this
-          // dialog was closed before completion the writes are no-ops, and
-          // React Query's cache invalidation will refresh `summary` on the
-          // next mount via the prop-sync effect above.
+          // already persisted it (append semantics), so no client-side save
+          // is needed — the next prop sync will match and clear isDirty.
           setDraft(data.summary);
-          lastSavedRef.current = data.summary;
         },
       },
     );
   };
 
+  const handleSave = () => {
+    if (!isDirty || isGenerating) return;
+    updateMeta.mutate(
+      { id: chatId, summary: draft.trim() ? draft : null },
+      {
+        onSuccess: () => onClose(),
+      },
+    );
+  };
+
+  const handleCancel = () => {
+    // Revert any pending edits before closing. Prevents the "did my draft
+    // just get lost?" surprise — explicit intent.
+    setDraft(propsSummary);
+    onClose();
+  };
+
   const wordCount = draft.trim() ? draft.trim().split(/\s+/).length : 0;
   const charCount = draft.length;
   const effectiveContextSize = Math.max(5, Math.min(200, parseInt(contextSizeStr, 10) || 50));
+  const saveDisabled = !isDirty || isGenerating || updateMeta.isPending;
 
   return (
     <div className="space-y-4">
@@ -123,6 +108,9 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
         <div className="flex items-center justify-between">
           <label htmlFor="summary-text" className="text-xs font-medium text-[var(--foreground)]">
             Summary
+            {isDirty && !isGenerating && (
+              <span className="ml-2 text-[0.625rem] font-normal text-[var(--muted-foreground)]">· unsaved changes</span>
+            )}
           </label>
           <span className="text-[0.625rem] tabular-nums text-[var(--muted-foreground)]">
             {wordCount.toLocaleString()} words · {charCount.toLocaleString()} chars
@@ -142,7 +130,7 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
           )}
         />
         <p className="text-[0.625rem] text-[var(--muted-foreground)]/70">
-          Auto-saves as you type. Injected into every prompt at the chat-summary marker.
+          Injected into every prompt at the chat-summary marker.
         </p>
       </div>
 
@@ -191,18 +179,35 @@ export function SummaryDialog({ chatId, summary, contextSize, onContextSizeChang
           </button>
         </div>
         <p className="text-[0.625rem] text-[var(--muted-foreground)]/70">
-          Appends a new paragraph covering the last {effectiveContextSize} messages to the summary above.
+          Appends a new paragraph covering the last {effectiveContextSize} messages to the summary above. Saves
+          immediately.
         </p>
       </div>
 
-      {/* Footer actions — matches the house pattern used by EditAgentModal etc. */}
-      <div className="flex items-center justify-between gap-2 border-t border-[var(--border)]/40 pt-3">
-        <span className="text-[0.625rem] text-[var(--muted-foreground)]/60">Auto-saved.</span>
+      {/* Footer actions — compact Cancel + gradient Save, matching the
+          minimal aesthetic of the original SummaryPopover and the Lorebook
+          family of edit surfaces. Save is deliberately small and gradient-
+          branded rather than using --primary, to stay consistent with the
+          amber Generate button above and the app-wide convention for
+          "summary / lorebook / AI content" action buttons. */}
+      <div className="flex items-center justify-end gap-1.5 border-t border-[var(--border)]/40 pt-3">
         <button
-          onClick={onClose}
-          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-all hover:opacity-90"
+          onClick={handleCancel}
+          className="rounded-lg px-2.5 py-1 text-[0.625rem] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
         >
-          Done
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={saveDisabled}
+          className="flex items-center gap-1 rounded-lg bg-gradient-to-r from-amber-400 to-orange-500 px-2.5 py-1 text-[0.625rem] font-medium text-white shadow-sm transition-all hover:shadow-md active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:active:scale-100"
+        >
+          {updateMeta.isPending ? (
+            <Loader2 size="0.625rem" className="animate-spin" />
+          ) : (
+            <Save size="0.625rem" />
+          )}
+          Save
         </button>
       </div>
     </div>
