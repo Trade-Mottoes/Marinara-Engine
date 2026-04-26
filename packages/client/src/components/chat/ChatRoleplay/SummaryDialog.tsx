@@ -4,8 +4,8 @@
 // ──────────────────────────────────────────────
 import { useEffect, useState } from "react";
 import { Loader2, PenLine, Save, ScrollText, Sparkles, X } from "lucide-react";
-import { useGenerateSummary, useIsSummaryGenerating, useUpdateChatMetadata } from "../../hooks/use-chats";
-import { cn } from "../../lib/utils";
+import { useGenerateSummary, useIsSummaryGenerating, useUpdateChatMetadata } from "../../../hooks/use-chats";
+import { cn } from "../../../lib/utils";
 
 // ════════════════════════════════════════════════════════════════════════════
 // SummaryPeek — read-only preview with Generate access
