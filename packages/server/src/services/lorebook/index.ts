@@ -107,8 +107,18 @@ export async function processLorebooks(
     /** Cosine similarity threshold for semantic matching (0-1, default 0.3). */
     semanticThreshold?: number;
     /** Per-chat entry state overrides (from chat metadata). When provided, ephemeral
-     *  countdown is tracked here instead of modifying the global entry row. */
-    entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
+     *  countdown is tracked here instead of modifying the global entry row.
+     *  `pinned: true` forces an entry to activate regardless of scanner result
+     *  (a per-chat equivalent of the global `constant` flag). */
+    entryStateOverrides?: Record<
+      string,
+      { ephemeral?: number | null; enabled?: boolean; pinned?: boolean }
+    >;
+    /** When true, entries marked `enabled: false` in the per-chat overrides
+     *  are kept in the result so the UI can display them (greyed/strikethrough)
+     *  rather than silently omit them. Generation should leave this false so
+     *  disabled entries don't reach the prompt. */
+    includeDisabled?: boolean;
   },
 ): Promise<LorebookScanResult> {
   const storage = createLorebooksStorage(db);
@@ -139,21 +149,35 @@ export async function processLorebooks(
   // countdown in *this* chat should be excluded, and ephemeral values should
   // reflect the per-chat remaining count rather than the global default.
   const overrides = options?.entryStateOverrides;
+  const includeDisabled = options?.includeDisabled === true;
   if (overrides) {
     allEntries = allEntries
       .filter((e) => {
         const ov = overrides[e.id];
-        // If per-chat override explicitly disabled this entry, skip it
-        if (ov && ov.enabled === false) return false;
+        // If per-chat override explicitly disabled this entry, skip — unless
+        // the caller asked for disabled entries to remain (UI scan does this
+        // so the panel can render them).
+        if (ov && ov.enabled === false && !includeDisabled) return false;
         return true;
       })
       .map((e) => {
         const ov = overrides[e.id];
-        if (ov && ov.ephemeral !== undefined) {
+        if (!ov) return e;
+        let entry = e;
+        if (ov.ephemeral !== undefined) {
           // Use per-chat ephemeral remaining instead of global value
-          return { ...e, ephemeral: ov.ephemeral };
+          entry = { ...entry, ephemeral: ov.ephemeral };
         }
-        return e;
+        if (ov.pinned === true) {
+          // Pinned entries activate as if `constant: true`. The generation
+          // path filters out disabled entries above (line 160), so this only
+          // sets constant on entries that will actually inject. The scan path
+          // (includeDisabled=true) lets disabled+pinned entries through so the
+          // panel can show them as greyed rather than silently dropping them
+          // from the list when the user toggles a pinned entry off.
+          entry = { ...entry, constant: true };
+        }
+        return entry;
       });
   }
 

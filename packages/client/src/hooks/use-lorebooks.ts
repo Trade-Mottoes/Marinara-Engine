@@ -150,6 +150,41 @@ export interface ActiveLorebookEntry {
   lorebookId: string;
   order: number;
   constant: boolean;
+  /**
+   * The user's per-chat enable choice. False only when explicitly disabled
+   * via the eye toggle. Independent of whether the scanner currently matches.
+   */
+  userEnabled: boolean;
+  /**
+   * The user's per-chat pin choice. Pinned entries are forced into the
+   * scanner's activated set as if they had `constant: true`, so they reach
+   * the prompt even when no keyword matches. Disable still wins.
+   */
+  userPinned: boolean;
+  /**
+   * Whether the scanner promoted this entry into its activated set,
+   * independent of the user's disable flag. True for CONST, pinned (via
+   * server-side constant promotion), and keyword/semantic matches. Drives
+   * the dot colour (along with userEnabled).
+   */
+  scannerActivated: boolean;
+  /**
+   * Whether any of this entry's keys appear as a substring in the chat
+   * text (or current draft). Computed INDEPENDENTLY of CONST/pinned, so
+   * the M pill can light up alongside C or P. Substring-only — doesn't
+   * honour each entry's match-options or secondary-keys logic; that's a
+   * UI hint, not a generation signal.
+   */
+  keywordMatched: boolean;
+  /**
+   * Whether this entry will actually be in the next generated prompt:
+   * `userEnabled && scannerActivated`. The dot colour reflects this
+   * directly. An entry can be on the panel list (because of an override)
+   * without injecting (e.g. disabled, or pinned-then-disabled).
+   */
+  isInjecting: boolean;
+  /** Estimated token count for this entry's content (chars/4 heuristic). */
+  tokens: number;
 }
 
 export interface ActiveLorebookScan {
@@ -158,10 +193,20 @@ export interface ActiveLorebookScan {
   totalEntries: number;
 }
 
-export function useActiveLorebookEntries(chatId: string | null, enabled = false) {
+export function useActiveLorebookEntries(chatId: string | null, enabled = false, prepend = "") {
+  // The scan endpoint accepts an optional `?prepend=` query param to scan
+  // against a hypothetical user message (the typed-but-unsent draft). When
+  // a prepend is supplied to this hook, every fetch — initial mount, manual
+  // invalidation after toggle, the staleness-based auto-refresh — uses it.
+  // Callers that want a plain history-only scan pass an empty string.
   return useQuery({
-    queryKey: [...lorebookKeys.all, "active", chatId] as const,
-    queryFn: () => api.get<ActiveLorebookScan>(`/lorebooks/scan/${chatId}`),
+    queryKey: [...lorebookKeys.all, "active", chatId, prepend] as const,
+    queryFn: () => {
+      const url = prepend
+        ? `/lorebooks/scan/${chatId}?prepend=${encodeURIComponent(prepend)}`
+        : `/lorebooks/scan/${chatId}`;
+      return api.get<ActiveLorebookScan>(url);
+    },
     enabled: !!chatId && enabled,
     staleTime: 30_000,
   });

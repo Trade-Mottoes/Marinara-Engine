@@ -189,8 +189,9 @@ export async function lorebooksRoutes(app: FastifyInstance) {
 
   // ── Scan chat for activated entries ──
 
-  app.get<{ Params: { chatId: string } }>("/scan/:chatId", async (req, reply) => {
+  app.get<{ Params: { chatId: string }; Querystring: { prepend?: string } }>("/scan/:chatId", async (req, reply) => {
     const { chatId } = req.params;
+    const prepend = typeof req.query.prepend === "string" ? req.query.prepend : "";
     const chatsStorage = createChatsStorage(app.db);
     const chatMessages = await chatsStorage.listMessages(chatId);
     if (!chatMessages.length) return reply.send({ entries: [], totalTokens: 0, totalEntries: 0 });
@@ -224,30 +225,146 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       content: typeof m.content === "string" ? m.content : "",
     }));
 
+    // Optional preview mode: callers can scan as if a hypothetical user
+    // message were appended to the chat history. Used by the World Info
+    // panel's regenerate button so users can see which entries would
+    // activate against their currently-typed-but-unsubmitted input.
+    if (prepend.trim()) {
+      scanMessages.push({ role: "user", content: prepend });
+    }
+
+    // Read per-chat entry state overrides so we can:
+    //   - annotate each entry with its userEnabled / userPinned flags for UI
+    //   - force-activate pinned entries via processLorebooks (chars/4 budget,
+    //     scanner promotes them to constant)
+    //   - keep disabled entries in the result (includeDisabled) so the panel
+    //     can render them with the eye-off treatment
+    let entryStateOverrides:
+      | Record<string, { ephemeral?: number | null; enabled?: boolean; pinned?: boolean }>
+      | undefined;
+    if (chat) {
+      try {
+        const meta =
+          typeof chat.metadata === "string"
+            ? JSON.parse(chat.metadata)
+            : ((chat.metadata as Record<string, unknown>) ?? {});
+        if (meta.entryStateOverrides && typeof meta.entryStateOverrides === "object") {
+          entryStateOverrides = meta.entryStateOverrides as typeof entryStateOverrides;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     const result = await processLorebooks(app.db, scanMessages, null, {
       chatId,
       characterIds,
       activeLorebookIds,
+      entryStateOverrides,
+      includeDisabled: true,
     });
 
-    // Fetch full entry data for the activated IDs
-    const activeEntries =
-      result.activatedEntryIds.length > 0
-        ? await Promise.all(result.activatedEntryIds.map((id) => storage.getEntry(id))).then((entries) =>
-            entries.filter(Boolean),
-          )
+    // Build the response set: scanner-activated UNION user-overridden.
+    //
+    // Scanner-activated covers CONST entries, keyword/semantic matches,
+    // and pinned entries (which were promoted to constant in processLorebooks).
+    //
+    // User-overridden adds entries the user has interacted with — pinned
+    // (already in scanner set, but listed for completeness) and disabled.
+    // Disabled-without-current-match needs explicit inclusion: the scanner
+    // doesn't return them since they don't currently match keywords, but the
+    // panel needs them on the list so the user can re-enable.
+    //
+    // Pure scanner-match-no-longer-relevant entries (no override, scanner
+    // doesn't currently match) drop from the list — they have no anchor.
+    const activatedSet = new Set(result.activatedEntryIds);
+    const overriddenIds = entryStateOverrides
+      ? Object.entries(entryStateOverrides)
+          .filter(([, ov]) => ov.enabled === false || ov.pinned === true)
+          .map(([id]) => id)
+      : [];
+    const allIds = Array.from(new Set([...result.activatedEntryIds, ...overriddenIds]));
+    const allEntries =
+      allIds.length > 0
+        ? await Promise.all(allIds.map((id) => storage.getEntry(id))).then((entries) => entries.filter(Boolean))
         : [];
 
+    // Independent keyword-match check. The scanner short-circuits on
+    // `entry.constant`, so for CONST and pinned-promoted-to-constant entries
+    // we never learn whether the keywords would have matched. For the
+    // multi-pill UI ("show every reason this entry is here"), we need that
+    // info regardless of the constant short-circuit. Run a simple
+    // case-insensitive substring check over the same scan text.
+    //
+    // Trade-offs: we don't honour each entry's regex/whole-words/case-
+    // sensitive options or secondary-keys/selective-logic. Real generation
+    // uses the proper scanner — this check is purely for UI hints. Semantic-
+    // only matches (no keyword in text, vector similarity above threshold)
+    // also won't trigger this; the dot's emerald state still indicates
+    // injection in those cases.
+    const scanTextForKeywordCheck = scanMessages
+      .map((m) => (typeof m.content === "string" ? m.content : ""))
+      .join("\n")
+      .toLowerCase();
+    const keywordMatchSet = new Set<string>();
+    for (const e of allEntries) {
+      const id = (e as Record<string, unknown>).id as string;
+      const rawKeys = (e as Record<string, unknown>).keys;
+      let keys: string[] = [];
+      try {
+        keys = typeof rawKeys === "string" ? JSON.parse(rawKeys) : ((rawKeys as string[]) ?? []);
+      } catch {
+        /* ignore */
+      }
+      if (keys.length === 0) continue;
+      for (const key of keys) {
+        const k = String(key).trim().toLowerCase();
+        if (k && scanTextForKeywordCheck.includes(k)) {
+          keywordMatchSet.add(id);
+          break;
+        }
+      }
+    }
+
     return {
-      entries: activeEntries.map((e) => ({
-        id: (e as Record<string, unknown>).id,
-        name: (e as Record<string, unknown>).name,
-        content: (e as Record<string, unknown>).content,
-        keys: (e as Record<string, unknown>).keys,
-        lorebookId: (e as Record<string, unknown>).lorebookId,
-        order: (e as Record<string, unknown>).order,
-        constant: (e as Record<string, unknown>).constant,
-      })),
+      entries: allEntries.map((e) => {
+        const id = (e as Record<string, unknown>).id as string;
+        const content = ((e as Record<string, unknown>).content as string) ?? "";
+        const override = entryStateOverrides?.[id];
+        const userEnabled = override?.enabled !== false;
+        const userPinned = override?.pinned === true;
+        // Whether the scanner promoted this entry into its activated set —
+        // independent of the user's disable flag. True for CONST, pinned
+        // (via constant promotion in processLorebooks), and keyword/semantic
+        // matches. Drives the dot colour together with userEnabled.
+        const scannerActivated = activatedSet.has(id);
+        // Whether any of this entry's keys appear as substrings in the chat
+        // text (or current draft). True INDEPENDENTLY of CONST/pinned status,
+        // so the M pill can light up alongside C or P. See keywordMatchSet
+        // construction above for trade-offs.
+        const keywordMatched = keywordMatchSet.has(id);
+        // "Will inject in next generation": scanner activated it AND user
+        // hasn't disabled it. During real generation, processLorebooks's
+        // own filter applies the same logic; this field mirrors it for UI.
+        const isInjecting = userEnabled && scannerActivated;
+        return {
+          id,
+          name: (e as Record<string, unknown>).name,
+          content,
+          keys: (e as Record<string, unknown>).keys,
+          lorebookId: (e as Record<string, unknown>).lorebookId,
+          order: (e as Record<string, unknown>).order,
+          constant: (e as Record<string, unknown>).constant,
+          userEnabled,
+          userPinned,
+          scannerActivated,
+          keywordMatched,
+          isInjecting,
+          // Per-entry token estimate (chars/4) — lets the client show
+          // tokens-actually-injecting rather than tokens-of-everything.
+          tokens: Math.ceil(content.length / 4),
+        };
+      }),
       totalTokens: result.totalTokensEstimate,
       totalEntries: result.totalEntries,
     };

@@ -78,7 +78,7 @@ const SummaryPopover = lazy(async () => {
 });
 
 const WorldInfoPanel = lazy(async () => {
-  const module = await import("./ChatRoleplayPanels");
+  const module = await import("./WorldInfoPanel");
   return { default: module.WorldInfoPanel };
 });
 
