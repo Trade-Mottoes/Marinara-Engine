@@ -1,0 +1,10 @@
+# Per-Claude-Code project state. Contains personal allowlists, hooks,
+# and env paths — must NOT be backed up to a remote.
+.claude/
+
+# In case node_modules ever ends up here (it shouldn't).
+node_modules/
+
+# Snapshot output is outside the repo by default; this is just belt-and-braces
+# in case anyone reroutes it under the worktree.
+/snapshots/
