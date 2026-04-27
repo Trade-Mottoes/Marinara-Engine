@@ -22,6 +22,7 @@ import { adminRoutes } from "./admin.routes.js";
 import { regexScriptsRoutes } from "./regex-scripts.routes.js";
 import { encounterRoutes } from "./encounter.routes.js";
 import { sceneRoutes } from "./scene.routes.js";
+import { sceneConcludePreviewRoutes } from "./scene-conclude-preview.routes.js";
 import { fontsRoutes } from "./fonts.routes.js";
 import { galleryRoutes } from "./gallery.routes.js";
 import { spotifyAuthRoutes } from "./spotify-auth.routes.js";
@@ -69,6 +70,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(regexScriptsRoutes, { prefix: "/api/regex-scripts" });
   await app.register(encounterRoutes, { prefix: "/api/encounter" });
   await app.register(sceneRoutes, { prefix: "/api/scene" });
+  await app.register(sceneConcludePreviewRoutes, { prefix: "/api/scene/conclude" });
   await app.register(fontsRoutes, { prefix: "/api/fonts" });
   await app.register(galleryRoutes, { prefix: "/api/gallery" });
   await app.register(spotifyAuthRoutes, { prefix: "/api/spotify" });
