@@ -59,6 +59,7 @@ import { RecentChats } from "./RecentChats";
 import { HomeFaq } from "./HomeFaq";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays } from "./ChatCommonOverlays";
+import { EndSceneDialog } from "./ChatRoleplay/EndSceneDialog";
 
 export type { CharacterMap };
 
@@ -294,7 +295,12 @@ export function ChatArea() {
   const chatMode = rawMode ?? lastModeRef.current;
   const isRoleplay = chatMode === "roleplay" || chatMode === "visual_novel";
   const { startEncounter } = useEncounter();
-  const { concludeScene, abandonScene, forkScene, isForking } = useScene();
+  const { abandonScene, forkScene, isForking } = useScene();
+  // Scene-conclude is handled by the EndSceneDialog (preview/edit/commit flow)
+  // rather than the atomic useScene().concludeScene call. The dialog state
+  // lives here so both Roleplay and Conversation surfaces can open it.
+  const [endSceneDialogId, setEndSceneDialogId] = useState<string | null>(null);
+  const openEndSceneDialog = (sceneChatId: string) => setEndSceneDialogId(sceneChatId);
   const encounterActive = useEncounterStore((s) => s.active || s.showConfigModal);
 
   // Sprite sidebar settings from chat metadata
@@ -1347,7 +1353,7 @@ export function ChatArea() {
             onPeekPrompt={handlePeekPrompt}
             onToggleSelectMessage={handleToggleSelectMessage}
             onSwitchChat={chat?.connectedChatId ? () => setActiveChatId(chat.connectedChatId!) : undefined}
-            onConcludeScene={chatMeta.sceneStatus === "active" ? () => concludeScene(activeChatId) : undefined}
+            onConcludeScene={chatMeta.sceneStatus === "active" ? () => openEndSceneDialog(activeChatId) : undefined}
             onAbandonScene={chatMeta.sceneStatus === "active" ? () => abandonScene(activeChatId) : undefined}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenFiles={() => setFilesOpen(true)}
@@ -1381,6 +1387,11 @@ export function ChatArea() {
             onClose={() => useChatStore.getState().setPendingNewChatMode(null)}
           />
         )}
+        <EndSceneDialog
+          open={!!endSceneDialogId}
+          sceneChatId={endSceneDialogId}
+          onClose={() => setEndSceneDialogId(null)}
+        />
       </>
     );
   }
@@ -1457,7 +1468,7 @@ export function ChatArea() {
           onSummaryContextSizeChange={handleSummaryContextSizeChange}
           onRerunTrackers={handleRerunTrackers}
           onStartEncounter={() => startEncounter()}
-          onConcludeScene={() => concludeScene(activeChatId)}
+          onConcludeScene={() => openEndSceneDialog(activeChatId)}
           onAbandonScene={() => abandonScene(activeChatId)}
           onForkScene={forkScene}
           isForkingScene={isForking || isStreaming}
@@ -1497,6 +1508,11 @@ export function ChatArea() {
           onClose={() => useChatStore.getState().setPendingNewChatMode(null)}
         />
       )}
+      <EndSceneDialog
+        open={!!endSceneDialogId}
+        sceneChatId={endSceneDialogId}
+        onClose={() => setEndSceneDialogId(null)}
+      />
     </>
   );
 }
