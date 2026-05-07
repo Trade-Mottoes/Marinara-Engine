@@ -1,8 +1,22 @@
 # Marinara-Engine — Session Handover
 
-Most recent session: 2026-05-06. The state of the world for the next Claude.
+Most recent session: 2026-05-07. The state of the world for the next Claude.
 
 Previous session: late Apr 2026 (work logged below the "Critical learnings" header still reflects that earlier work).
+
+## Personal-project layer: MyBrain outer index
+
+Marinara-Engine is one of John's **personal projects**, so the outer index for it lives in his MyBrain vault:
+
+- **Outer index:** `~/me/MyBrain/Projects/Marinara-Engine/README.md`
+- **Per-session detail notes:** `~/me/MyBrain/Projects/Marinara-Engine/YYYY-MM-DD <Title>.md` (expansive, capture the why)
+- **Cross-project learnings discovered while working on Marinara:** `~/me/MyBrain/Knowledge/<Topic>.md`
+
+The MyBrain layer is the **orientation surface** — what this project is, where its files live, current state, links to detail notes. The deep operational stuff (this file, `marinara-pr-workflow.md`, `feature-ideas.md`, `test-fixtures/lorebook-test.md`) continues to live here in `claude/`. Both layers are in play when working on Marinara: MyBrain when orienting, `claude/` when working.
+
+See `~/.claude/CLAUDE.md` (`## Personal projects (MyBrain vault)` section) for the full convention. **First MyBrain access in a session needs a directory grant** — either request it via the directory-request tool, or John will say to skip it.
+
+When wrapping up a substantive session: write the in-repo handover (this file) AND the MyBrain detail note. Different voices — handover is operational ("next Claude does X"); MyBrain note is reflective ("we did X because Y; A and B were considered and rejected for these reasons"). Overlap is fine.
 
 ## Repo orientation
 
