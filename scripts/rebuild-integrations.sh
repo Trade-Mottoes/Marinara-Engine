@@ -9,8 +9,8 @@ BRANCHES=(
   fix/character-memories-recency-cap
   fix/sidecar-honour-explicit-maxtokens
   fix/scene-summary-respects-agent-defaults
-# fix/lorebooks-ignored-without-preset — MERGED UPSTREAM as PR #225 (now in pd/main)
-  fix/lorebook-scan-skips-empty-chats
+# fix/lorebooks-ignored-without-preset — MERGED UPSTREAM as PR #225
+# fix/lorebook-scan-skips-empty-chats — MERGED UPSTREAM as PR #245
 # refactor/author-notes-dialog — redundant with upstream's #239 (f15a9d5)
   refactor/summary-dialog
   feat/prompt-debug-dumps

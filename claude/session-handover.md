@@ -1,6 +1,8 @@
 # Marinara-Engine — Session Handover
 
-Most recent session: late Apr 2026. The state of the world for the next Claude.
+Most recent session: 2026-05-06. The state of the world for the next Claude.
+
+Previous session: late Apr 2026 (work logged below the "Critical learnings" header still reflects that earlier work).
 
 ## Repo orientation
 
@@ -12,24 +14,28 @@ Most recent session: late Apr 2026. The state of the world for the next Claude.
 
 ## Branch state at end of session
 
+**Sync baseline:** `main` and `pd/main` both at **`12b3ff8`** (Pasta-Devs PR #485). Brought forward from `19e0713` this session — 157 upstream commits absorbed in one fast-forward.
+
 **Merged upstream (permanent wins):**
 
 - **PR #225** — `fix/lorebooks-ignored-without-preset` ✅ in `pd/main`. Branch removed.
+- **PR #245** — `fix/lorebook-scan-skips-empty-chats` ✅ in `pd/main`. Branch removed; commented out of `rebuild-integrations.sh`.
+- **PR #239 (upstream)** — landed an alternative author-notes save-race fix that supersedes our `refactor/author-notes-dialog`. Our branch is now redundant; commented out of `rebuild-integrations.sh`.
 
 **In flight to upstream:**
 
-- **`fix/lorebook-scan-skips-empty-chats`** — submitted as a PR this session. Three-line fix; comment-stripped pre-squash; rebased onto current `pd/main`. Awaiting upstream response. (Wait-for-engagement rule: do NOT open a second PR until this gets a verdict.)
+- _(none — wait-for-engagement window is open, queue below is ready to draw from)_
 
 **Open / inactive:**
 
-- **PR #213** — `refactor/author-notes-dialog` — opened but not merged. Upstream landed a different save-race fix (#239). Redundant. Can be deleted at leisure.
+- **PR #213** — `refactor/author-notes-dialog` — opened but not merged. Upstream landed a different save-race fix (#239). Redundant. Can be closed/deleted at leisure.
 
-**On bench (not yet PR'd, ready when the wait-for-engagement window opens):**
+**On bench (not yet PR'd, ready when wait-for-engagement window opens):**
 
 ```
 fix/google-provider-thinking-budget          (high-impact Gemini fix, narrow)
 fix/google-provider-no-candidates-crash      (defensive parser hardening)
-fix/agents-panel-enable-toggle               (restores UI for enabling agents)
+fix/agents-panel-enable-toggle               (restores UI for enabling agents — REBASED THIS SESSION onto pd/main 12b3ff8, force-pushed origin)
 fix/conversation-default-preset              (stop auto-assigning preset to convo chats)
 fix/character-memories-recency-cap           (don't drop memories after midnight)
 fix/sidecar-honour-explicit-maxtokens        (Math.max semantics — see below)
@@ -40,9 +46,10 @@ feat/prompt-debug-dumps                      (opt-in diagnostic, debug aid)
 
 **Branch-state notes:**
 
-- The original `fix/conversation-memory-and-sidecar-maxtokens` was **split into three independent branches** mid-session (preset, memories, sidecar) because the fixes were unrelated and three small focused PRs land cleaner than one bundled.
+- The original `fix/conversation-memory-and-sidecar-maxtokens` was **split into three independent branches** in the prior session (preset, memories, sidecar) because the fixes were unrelated and three small focused PRs land cleaner than one bundled.
 - `fix/sidecar-honour-explicit-maxtokens` evolved through three semantics on the `Math.min(req, cfg)` line: original buggy `min` → patch v1 `requestedMaxTokens ?? config.maxTokens` (caller wins) → final `Math.max(requestedMaxTokens ?? 0, config.maxTokens)`. The reframe: caller's value is a task-specific **floor** (minimum headroom), user's runtime config is their preferred **ceiling**. Combine with `max()` so neither side silently demotes the other.
-- `fix/scene-summary-respects-agent-defaults` gained a third commit this session: scene-conclude's `resolveUtilityConnection` now special-cases `LOCAL_SIDECAR_CONNECTION_ID` (mirrors `chats.routes.ts /generate-summary`). Without this, agents configured for "Local Model (sidecar)" caused HTTP 500 from POST /api/scene/conclude with "API connection not found".
+- `fix/scene-summary-respects-agent-defaults` (3 commits): scene-conclude's `resolveUtilityConnection` special-cases `LOCAL_SIDECAR_CONNECTION_ID` (mirrors `chats.routes.ts /generate-summary`). Without this, agents configured for "Local Model (sidecar)" caused HTTP 500 from POST /api/scene/conclude with "API connection not found".
+- `fix/agents-panel-enable-toggle` was **rebased onto current `pd/main` (12b3ff8) and force-pushed** this session. The recurring-conflict pattern was hitting it on every `rebuild-integrations.sh` run — fixing in-place on test/general didn't survive the next wipe-and-rebuild. Resolution baked into the rebase: `phase: savedPhase` (drops a duplicate `enabled: true` and adopts upstream's savedPhase rename for `text_rewrite` custom agents); take HEAD's imports for `useMemo` and `GripVertical` in `AgentsPanel.tsx`. Now lands clean on every rebuild.
 
 **Local-only (forked features, not for upstream submission):**
 
@@ -82,7 +89,38 @@ fork/tooling                      (orphan — scripts + claude/ notes backup)
 - `.gitignore` excludes `.claude/` (Claude Code's per-project state — has personal allowlists/hooks).
 - Update workflow: edit in main worktree → `./scripts/publish-tooling.sh` → done.
 
-## Critical learnings from this session
+## Critical learnings from THIS session (2026-05-06 — upstream sync)
+
+### feat/world-info-interactive lost its in-route entry-editor sub-view to upstream
+
+Upstream replaced the "click an entry → navigate to a sub-view" pattern in `LorebookEditor.tsx` with **inline expansion** (`expandedEntryId` state — entries expand in-place rather than swapping the route view). Our branch's `if (editingEntryId && entryForm) return <LorebookEntryEditor … />` block referenced state vars (`editingEntryId`, `entryForm`, `handleSaveEntry`, `handleExitEntry`) that no longer exist on HEAD, so it was dropped during the merge.
+
+What survives:
+
+- `LorebookEntryEditor.tsx` (the extracted ~530-line entry-edit form) **still exists and is still used** — `LorebookEntryQuickEditModal.tsx` wraps it for the WorldInfoPanel pencil-icon modal. So the modal-from-pin UX from `feat/world-info-interactive` continues to work.
+- The route-level lorebook page now uses upstream's inline expansion instead of our extracted editor.
+
+What's lost:
+
+- The route-page's "click entry → fullscreen sub-view edit" flow. Replaced by inline expansion.
+
+If you want to restore that flow, you'd need to re-add the state vars (`editingEntryId`, `entryForm`, etc.), the open/close handlers, and a button on `LorebookEntryRow` that triggers them. Probably not worth it — inline expansion is fine for the route page; the modal is what matters for in-chat workflow.
+
+### test/general conflict resolutions baked in this session
+
+- **`scene.routes.ts` (fix/scene-summary-respects-agent-defaults vs upstream try/catch):** combined upstream's `try { … } catch (error) { logger.error … return reply.status(502) }` with the branch's sidecar-aware `model` variable (replacing the out-of-scope `conn.model` in HEAD's logger fields). Dropped `provider: conn.provider` from the structured log because `conn` doesn't exist when `utility.kind === "sidecar"` — kept just `{err, sceneChatId, model}`.
+- **`lorebooks.routes.ts` (feat/world-info-interactive vs upstream generationTriggers):** kept BOTH `generationTriggers: resolveScanGenerationTriggers(chat?.mode)` (HEAD) and `entryStateOverrides, includeDisabled: true` (branch). Orthogonal options.
+- **`lorebook/index.ts` (feat/world-info-interactive vs upstream generationTriggers):** combined HEAD's `generationTriggers?: string[]` option with branch's `pinned` field on `entryStateOverrides` and the `includeDisabled?: boolean` option. All three live together in the options type now.
+
+### LM Studio Qwen3-VL prompt template gotcha (LM Studio side, not Marinara)
+
+Not Marinara-specific but worth a note for future debugging of local-sidecar / LM Studio errors: **MLX Jinja runtime in LM Studio doesn't faithfully execute all Jinja2 constructs.** Specifically, `messages[::-1]` reverse-slice and namespace mutation inside nested `{%- if %}` blocks can silently fail. Symptom: a template's reverse-walk loop (e.g. Qwen3's `last_query_index` finder) leaves `multi_step_tool=true` and trips a `raise_exception('No user query found in messages.')` even when a user message exists.
+
+Fix on the LM Studio side: delete the raise (preserves vision/tool support), OR swap to the canonical non-VL template (loses vision). User landed on the delete-the-raise option for a Qwen3-VL heretic model and it works.
+
+If a user reports "LM Studio test message works but real chat fails," check whether the conversation starts with an assistant turn (character greeting) — that's the trigger.
+
+## Critical learnings from previous sessions (still relevant)
 
 ### Server-side scan / utility-task issues
 
@@ -164,10 +202,11 @@ Drop this file (and `claude/marinara-pr-workflow.md` for PR prep, `claude/featur
    ```bash
    git config --local --get user.email                # MUST be trade-mottoes-1g@icloud.com
    git remote -v                                      # confirm origin=Trade-Mottoes, pd=Pasta-Devs
-   git fetch pd && git log main..pd/main --oneline    # any new upstream commits?
+   git fetch pd && git log main..pd/main --oneline    # any new upstream commits since 12b3ff8?
    git branch --list "fix/*" "feat/*" "refactor/*" "fork/*"   # see all branches
    git worktree list                                  # confirm Marinara-tooling worktree exists
    ```
+   Baseline at end of previous session: `main` and `pd/main` both at **12b3ff8**. If `git log main..pd/main` shows commits, an upstream sync is pending — see "Critical learnings from THIS session" for the workflow that worked.
 
 2. **Start any commit work with branch-check** (the wrong-branch-commit footgun from earlier sessions):
    ```bash
