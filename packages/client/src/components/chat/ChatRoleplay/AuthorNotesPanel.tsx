@@ -1,11 +1,12 @@
 // ──────────────────────────────────────────────
-// Author's Notes panel — fragments edition
+// Author's Notes panel — entries edition
 //
 // Replaces the upstream single-textarea Author's Notes with an ordered
-// list of toggleable fragments. Active fragments compose into the same
+// list of toggleable notes. Active notes compose into the same
 // injection block at the same depth — server-side composer in
 // services/author-notes/compose.ts handles both the legacy
-// `authorNotes` string and the new `authorNoteFragments` array, so
+// `authorNotes` string and the new `authorNoteFragments` array (the
+// storage key kept its legacy name to avoid a metadata migration), so
 // chats untouched by this UI keep working bit-identically.
 //
 // Lives in its own file (rather than alongside upstream's panel) so
@@ -15,7 +16,7 @@
 // ──────────────────────────────────────────────
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Eye, EyeOff, PenLine, Plus, Trash2, X } from "lucide-react";
-import type { AuthorNoteFragment } from "@marinara-engine/shared";
+import type { AuthorsNoteEntry } from "@marinara-engine/shared";
 import { useUpdateChatMetadata } from "../../../hooks/use-chats";
 
 interface AuthorNotesPanelProps {
@@ -28,30 +29,30 @@ interface AuthorNotesPanelProps {
 export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: AuthorNotesPanelProps) {
   const updateMeta = useUpdateChatMetadata();
 
-  // Hydrate fragments from chat metadata, with one-shot migration of any
-  // legacy single-string `authorNotes` into a single enabled fragment so
+  // Hydrate entries from chat metadata, with one-shot migration of any
+  // legacy single-string `authorNotes` into a single enabled note so
   // the user doesn't lose what was already typed there.
-  const initialFragments = useMemo(
-    () => hydrateFragments(chatMeta),
+  const initialEntries = useMemo(
+    () => hydrateEntries(chatMeta),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chatId],
   );
 
-  const [fragments, setFragments] = useState<AuthorNoteFragment[]>(initialFragments);
+  const [entries, setEntries] = useState<AuthorsNoteEntry[]>(initialEntries);
   const [depthStr, setDepthStr] = useState(String((chatMeta.authorNotesDepth as number) ?? 4));
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => collectInitiallyExpanded(initialFragments));
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => collectInitiallyExpanded(initialEntries));
 
   // Refs for the unmount-flush pattern (popover dismissals trigger unmount
   // before onBlur of an in-progress textarea would fire — without flushing,
   // the user's last keystroke is lost).
-  const latestRef = useRef<{ fragments: AuthorNoteFragment[]; depth: number }>({
-    fragments: initialFragments,
+  const latestRef = useRef<{ entries: AuthorsNoteEntry[]; depth: number }>({
+    entries: initialEntries,
     depth: parseInt(depthStr, 10) || 4,
   });
-  latestRef.current = { fragments, depth: parseInt(depthStr, 10) || 4 };
+  latestRef.current = { entries, depth: parseInt(depthStr, 10) || 4 };
 
   const baselineRef = useRef({
-    fragments: initialFragments,
+    entries: initialEntries,
     depth: parseInt(depthStr, 10) || 4,
   });
 
@@ -62,23 +63,26 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
   // the chat). Only fires when we're not actively editing — the baselineRef
   // stays put if the user has unsaved changes.
   useEffect(() => {
-    const externalFragments = hydrateFragments(chatMeta);
+    const externalEntries = hydrateEntries(chatMeta);
     const externalDepth = (chatMeta.authorNotesDepth as number) ?? 4;
-    setFragments(externalFragments);
+    setEntries(externalEntries);
     setDepthStr(String(externalDepth));
-    baselineRef.current = { fragments: externalFragments, depth: externalDepth };
+    baselineRef.current = { entries: externalEntries, depth: externalDepth };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatMeta.authorNoteFragments, chatMeta.authorNotes, chatMeta.authorNotesDepth]);
 
   // Flush-on-unmount: catches in-flight content edits the user hadn't blurred
-  // out of yet when the popover dismissed.
+  // out of yet when the popover dismissed. Applies pipe-split here too so a
+  // user who typed "a|b" and dismissed the popover gets the same split they
+  // would have gotten by blurring.
   useEffect(() => {
     const capturedChatId = chatId;
     return () => {
-      const { fragments: f, depth: d } = latestRef.current;
+      const { entries: e, depth: d } = latestRef.current;
+      const split = splitEntriesByPipe(e);
       const base = baselineRef.current;
-      if (!fragmentsEqual(f, base.fragments) || d !== base.depth) {
-        mutateRef.current({ id: capturedChatId, authorNoteFragments: f, authorNotesDepth: d });
+      if (!entriesEqual(split, base.entries) || d !== base.depth) {
+        mutateRef.current({ id: capturedChatId, authorNoteFragments: split, authorNotesDepth: d });
       }
     };
   }, [chatId]);
@@ -86,55 +90,60 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
   // ── Persistence helpers ──
 
   const persist = useCallback(
-    (next: AuthorNoteFragment[], nextDepth?: number) => {
+    (next: AuthorsNoteEntry[], nextDepth?: number) => {
       const depth = nextDepth ?? (parseInt(depthStr, 10) || 4);
       updateMeta.mutate({ id: chatId, authorNoteFragments: next, authorNotesDepth: depth });
-      baselineRef.current = { fragments: next, depth };
+      baselineRef.current = { entries: next, depth };
     },
     [chatId, depthStr, updateMeta],
   );
 
   // ── Operations ──
 
-  const addFragment = () => {
-    const id = generateFragmentId();
-    const next: AuthorNoteFragment[] = [...fragments, { id, content: "", enabled: true, order: fragments.length }];
-    setFragments(next);
+  const addNote = () => {
+    const id = generateEntryId();
+    const next: AuthorsNoteEntry[] = [...entries, { id, content: "", enabled: true, order: entries.length }];
+    setEntries(next);
     setExpandedIds((prev) => new Set([...prev, id]));
     persist(next);
   };
 
-  const deleteFragment = (id: string) => {
-    const next = renumber(fragments.filter((f) => f.id !== id));
-    setFragments(next);
+  const deleteNote = (id: string) => {
+    const next = renumber(entries.filter((e) => e.id !== id));
+    setEntries(next);
     persist(next);
   };
 
   const toggleEnabled = (id: string) => {
-    const next = fragments.map((f) => (f.id === id ? { ...f, enabled: !f.enabled } : f));
-    setFragments(next);
+    const next = entries.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e));
+    setEntries(next);
     persist(next);
   };
 
-  const moveFragment = (id: string, direction: "up" | "down") => {
-    const idx = fragments.findIndex((f) => f.id === id);
+  const moveNote = (id: string, direction: "up" | "down") => {
+    const idx = entries.findIndex((e) => e.id === id);
     if (idx < 0) return;
     const swap = direction === "up" ? idx - 1 : idx + 1;
-    if (swap < 0 || swap >= fragments.length) return;
-    const next = [...fragments];
+    if (swap < 0 || swap >= entries.length) return;
+    const next = [...entries];
     [next[idx], next[swap]] = [next[swap], next[idx]];
     const renumbered = renumber(next);
-    setFragments(renumbered);
+    setEntries(renumbered);
     persist(renumbered);
   };
 
   const updateContent = (id: string, content: string) => {
-    setFragments((prev) => prev.map((f) => (f.id === id ? { ...f, content } : f)));
+    setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, content } : e)));
   };
 
-  const commitContent = (id: string) => {
-    // On blur, persist whatever the local state is for this row.
-    persist(latestRef.current.fragments);
+  const commitContent = (_id: string) => {
+    // On blur: pipe-split any entry whose content contains "|" before
+    // persisting. The blurred entry is the usual trigger but we scan all
+    // entries so an unblurred sibling in the same panel can't carry a
+    // stale pipe through commit.
+    const next = splitEntriesByPipe(latestRef.current.entries);
+    if (next !== latestRef.current.entries) setEntries(next);
+    persist(next);
   };
 
   const toggleExpanded = (id: string) => {
@@ -149,11 +158,11 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
   const handleDepthBlur = () => {
     const nextDepth = Math.max(0, parseInt(depthStr, 10) || 0);
     setDepthStr(String(nextDepth));
-    persist(fragments, nextDepth);
+    persist(entries, nextDepth);
   };
 
-  const enabledCount = fragments.filter((f) => f.enabled && f.content.trim()).length;
-  const disabledCount = fragments.length - enabledCount;
+  const enabledCount = entries.filter((e) => e.enabled && e.content.trim()).length;
+  const disabledCount = entries.length - enabledCount;
 
   return (
     <>
@@ -171,30 +180,31 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
       </h3>
 
       <p className="mb-2 text-[0.625rem] text-[var(--muted-foreground)]">
-        Fragments are composed (in order) and injected at the chosen depth. Disable a fragment to keep it around
-        without injecting.
+        Notes are composed (in order) and injected at the chosen depth. Disable a note to keep it around
+        without injecting. Type <code className="rounded bg-[var(--accent)]/40 px-1 font-mono">|</code> in a note
+        to split it into multiple.
       </p>
 
-      {fragments.length === 0 ? (
+      {entries.length === 0 ? (
         <p className="rounded-lg border border-dashed border-[var(--border)] py-3 text-center text-[0.625rem] text-[var(--muted-foreground)]/70">
-          No fragments yet. Add one to start.
+          No notes yet. Add one to start.
         </p>
       ) : (
         <div className="space-y-1.5">
-          {fragments.map((f, i) => (
-            <FragmentRow
-              key={f.id}
-              fragment={f}
-              expanded={expandedIds.has(f.id)}
+          {entries.map((entry, i) => (
+            <EntryRow
+              key={entry.id}
+              entry={entry}
+              expanded={expandedIds.has(entry.id)}
               isFirst={i === 0}
-              isLast={i === fragments.length - 1}
-              onToggleExpanded={() => toggleExpanded(f.id)}
-              onToggleEnabled={() => toggleEnabled(f.id)}
-              onMoveUp={() => moveFragment(f.id, "up")}
-              onMoveDown={() => moveFragment(f.id, "down")}
-              onChangeContent={(content) => updateContent(f.id, content)}
-              onCommit={() => commitContent(f.id)}
-              onDelete={() => deleteFragment(f.id)}
+              isLast={i === entries.length - 1}
+              onToggleExpanded={() => toggleExpanded(entry.id)}
+              onToggleEnabled={() => toggleEnabled(entry.id)}
+              onMoveUp={() => moveNote(entry.id, "up")}
+              onMoveDown={() => moveNote(entry.id, "down")}
+              onChangeContent={(content) => updateContent(entry.id, content)}
+              onCommit={() => commitContent(entry.id)}
+              onDelete={() => deleteNote(entry.id)}
             />
           ))}
         </div>
@@ -202,13 +212,13 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
 
       <div className="mt-2 flex items-center justify-between gap-2">
         <button
-          onClick={addFragment}
+          onClick={addNote}
           className="flex items-center gap-1 rounded-md bg-[var(--secondary)] px-2 py-1 text-[0.625rem] font-medium text-[var(--foreground)]/80 transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
         >
           <Plus size="0.75rem" />
-          Add fragment
+          Add note
         </button>
-        {fragments.length > 0 && (
+        {entries.length > 0 && (
           <span className="text-[0.5625rem] text-[var(--muted-foreground)]/70">
             {enabledCount} active{disabledCount > 0 ? ` · ${disabledCount} disabled` : ""}
           </span>
@@ -234,11 +244,11 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
 }
 
 // ──────────────────────────────────────────────
-// FragmentRow
+// EntryRow
 // ──────────────────────────────────────────────
 
-interface FragmentRowProps {
-  fragment: AuthorNoteFragment;
+interface EntryRowProps {
+  entry: AuthorsNoteEntry;
   expanded: boolean;
   isFirst: boolean;
   isLast: boolean;
@@ -251,8 +261,8 @@ interface FragmentRowProps {
   onDelete: () => void;
 }
 
-function FragmentRow({
-  fragment,
+function EntryRow({
+  entry,
   expanded,
   isFirst,
   isLast,
@@ -263,9 +273,9 @@ function FragmentRow({
   onChangeContent,
   onCommit,
   onDelete,
-}: FragmentRowProps) {
-  const enabled = fragment.enabled;
-  const preview = fragment.content.trim().split("\n")[0]?.slice(0, 60) ?? "";
+}: EntryRowProps) {
+  const enabled = entry.enabled;
+  const preview = entry.content.trim().split("\n")[0]?.slice(0, 60) ?? "";
   const showPlaceholder = !preview;
 
   return (
@@ -307,8 +317,8 @@ function FragmentRow({
                 : "text-[var(--muted-foreground)] line-through decoration-[var(--muted-foreground)]/60"
           }`}
         >
-          {showPlaceholder ? "(empty fragment — click to write)" : preview}
-          {!showPlaceholder && fragment.content.length > 60 && "…"}
+          {showPlaceholder ? "(empty note — click to write)" : preview}
+          {!showPlaceholder && entry.content.length > 60 && "…"}
         </button>
 
         <button
@@ -333,7 +343,7 @@ function FragmentRow({
           type="button"
           onClick={onDelete}
           className="shrink-0 rounded p-0.5 text-[var(--muted-foreground)] opacity-50 transition-colors hover:bg-[var(--accent)] hover:text-red-400 group-hover:opacity-100"
-          title="Delete fragment"
+          title="Delete note"
         >
           <Trash2 size="0.75rem" />
         </button>
@@ -343,7 +353,7 @@ function FragmentRow({
       {expanded && (
         <div className="border-t border-[var(--border)]/40 p-1.5">
           <textarea
-            value={fragment.content}
+            value={entry.content}
             onChange={(e) => onChangeContent(e.target.value)}
             onBlur={onCommit}
             placeholder="e.g. Reveal that the visitor is secretly on a deadline."
@@ -360,41 +370,73 @@ function FragmentRow({
 // Helpers
 // ──────────────────────────────────────────────
 
-function hydrateFragments(meta: Record<string, any>): AuthorNoteFragment[] {
+function hydrateEntries(meta: Record<string, any>): AuthorsNoteEntry[] {
   const raw = meta?.authorNoteFragments;
   if (Array.isArray(raw)) {
     return raw
-      .filter((f) => f && typeof f === "object" && typeof f.id === "string" && typeof f.content === "string")
-      .map((f, i) => ({
-        id: f.id,
-        content: f.content,
-        enabled: f.enabled !== false,
-        order: typeof f.order === "number" ? f.order : i,
+      .filter((e) => e && typeof e === "object" && typeof e.id === "string" && typeof e.content === "string")
+      .map((e, i) => ({
+        id: e.id,
+        content: e.content,
+        enabled: e.enabled !== false,
+        order: typeof e.order === "number" ? e.order : i,
       }))
       .sort((a, b) => a.order - b.order);
   }
-  // Migration path: legacy single-string lifts into one enabled fragment.
+  // Migration path: legacy single-string lifts into one enabled note.
   // We don't write this back until the user actually edits — they could
   // reopen on an unmodified upstream client and still see their text.
   const legacy = meta?.authorNotes;
   if (typeof legacy === "string" && legacy.trim()) {
-    return [{ id: generateFragmentId(), content: legacy, enabled: true, order: 0 }];
+    return [{ id: generateEntryId(), content: legacy, enabled: true, order: 0 }];
   }
   return [];
 }
 
-function collectInitiallyExpanded(fragments: AuthorNoteFragment[]): Set<string> {
-  // Auto-expand if there's exactly one fragment so the user can see the
+function collectInitiallyExpanded(entries: AuthorsNoteEntry[]): Set<string> {
+  // Auto-expand if there's exactly one note so the user can see the
   // content without an extra click. Otherwise start collapsed for scanning.
-  if (fragments.length === 1) return new Set([fragments[0].id]);
+  if (entries.length === 1) return new Set([entries[0].id]);
   return new Set();
 }
 
-function renumber(fragments: AuthorNoteFragment[]): AuthorNoteFragment[] {
-  return fragments.map((f, i) => ({ ...f, order: i }));
+function renumber(entries: AuthorsNoteEntry[]): AuthorsNoteEntry[] {
+  return entries.map((e, i) => ({ ...e, order: i }));
 }
 
-function fragmentsEqual(a: AuthorNoteFragment[], b: AuthorNoteFragment[]): boolean {
+// Scan entries and split any whose content contains "|" into siblings
+// inserted directly after the source. Each piece is trimmed (spaces around a
+// typed pipe are almost always accidental) and fully-empty pieces are
+// dropped, so trailing/leading/doubled pipes don't leave empty notes.
+// New entries inherit the source's `enabled` flag — splitting shouldn't
+// silently change what gets injected. Returns the original array reference
+// when no split was needed, so callers can short-circuit cheaply.
+function splitEntriesByPipe(entries: AuthorsNoteEntry[]): AuthorsNoteEntry[] {
+  let changed = false;
+  const expanded: AuthorsNoteEntry[] = [];
+  for (const e of entries) {
+    if (!e.content.includes("|")) {
+      expanded.push(e);
+      continue;
+    }
+    changed = true;
+    const pieces = e.content
+      .split("|")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    if (pieces.length === 0) {
+      expanded.push({ ...e, content: "" });
+      continue;
+    }
+    expanded.push({ ...e, content: pieces[0] });
+    for (let i = 1; i < pieces.length; i++) {
+      expanded.push({ id: generateEntryId(), content: pieces[i], enabled: e.enabled, order: 0 });
+    }
+  }
+  return changed ? renumber(expanded) : entries;
+}
+
+function entriesEqual(a: AuthorsNoteEntry[], b: AuthorsNoteEntry[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     const x = a[i];
@@ -404,7 +446,7 @@ function fragmentsEqual(a: AuthorNoteFragment[], b: AuthorNoteFragment[]): boole
   return true;
 }
 
-function generateFragmentId(): string {
+function generateEntryId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return `frag-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `entry-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
