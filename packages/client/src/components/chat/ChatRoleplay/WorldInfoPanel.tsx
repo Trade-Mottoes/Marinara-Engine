@@ -159,7 +159,8 @@ function WorldInfoEntryRow({
   //   row opacity 50% = on the list but not injecting (disabled OR no
   //                     current activation rule firing — pinned-then-
   //                     disabled is an example of the latter)
-  //   pill (C/P/M)    = every reason the entry is on the list at all
+  //   pills          = every reason the entry is on the list at all, rendered
+  //                     as word pills on the action row below (const/pinned/match)
 
   return (
     <div
@@ -168,7 +169,7 @@ function WorldInfoEntryRow({
       }`}
       onClick={() => setExpanded((prev) => !prev)}
     >
-      {/* Top line: status dot · name · pills · order */}
+      {/* Top line: status dot · name · order */}
       <div className="flex items-center gap-2">
         <span
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -182,38 +183,6 @@ function WorldInfoEntryRow({
         >
           {entry.name}
         </span>
-        {/* Reason pills — every applicable condition shown independently.
-            C: globally constant in the lorebook editor.
-            P: user-pinned for this chat.
-            M: a keyword appears in the chat (or current draft / AN / Summary).
-            Multiple may light at once (e.g. C + P when a CONST entry has
-            also been pinned for "if I remove the constant flag later"). */}
-        <span className="flex shrink-0 items-center gap-0.5">
-          {entry.constant && (
-            <span
-              title="C — Constant: always injects globally (set in the lorebook editor)"
-              className="rounded bg-amber-400/15 px-1 py-0.5 text-[0.5rem] font-bold text-amber-400"
-            >
-              C
-            </span>
-          )}
-          {pinned && (
-            <span
-              title="P — Pinned for this chat (eye toggle still wins)"
-              className="rounded bg-sky-400/15 px-1 py-0.5 text-[0.5rem] font-bold text-sky-400"
-            >
-              P
-            </span>
-          )}
-          {matched && (
-            <span
-              title="M — Match: a keyword from this entry appears in the chat or your draft"
-              className="rounded bg-[var(--muted-foreground)]/15 px-1 py-0.5 text-[0.5rem] font-bold text-[var(--muted-foreground)]"
-            >
-              M
-            </span>
-          )}
-        </span>
         <span className="ml-auto shrink-0 text-[0.625rem] text-[var(--muted-foreground)]">#{entry.order}</span>
       </div>
 
@@ -225,11 +194,43 @@ function WorldInfoEntryRow({
         </p>
       )}
 
-      {/* Per-entry controls. Always visible; inactive states (unpinned, enabled-
-          default) are muted at rest so the resting list stays quiet for scanning,
-          and the row's hover state lifts them to full opacity. Active overrides
-          (pinned, user-disabled) keep their colour regardless of hover. */}
-      <div className="mt-1 flex items-center justify-end gap-1">
+      {/* Action row: reason pills on the left, action icons on the right.
+          Pills show every applicable condition independently — multiple may
+          light at once (e.g. const + pinned when a CONST entry has also been
+          pinned for "if I remove the constant flag later"). Order matches the
+          original CONST > PIN > MATCH prominence hierarchy.
+          Action icons inherit the original behaviour: inactive states (unpinned,
+          enabled-default, pencil-default) are muted at rest so the resting list
+          stays quiet for scanning, lift to full opacity on hover. Active
+          overrides (pinned, user-disabled) keep their colour regardless. */}
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <span className="flex shrink-0 items-center gap-1">
+          {entry.constant && (
+            <span
+              title="Constant: always injects globally (set in the lorebook editor)"
+              className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[0.625rem] font-bold text-amber-400"
+            >
+              const
+            </span>
+          )}
+          {pinned && (
+            <span
+              title="Pinned for this chat (eye toggle still wins)"
+              className="rounded bg-sky-400/15 px-1.5 py-0.5 text-[0.625rem] font-bold text-sky-400"
+            >
+              pinned
+            </span>
+          )}
+          {matched && (
+            <span
+              title="Match: a keyword from this entry appears in the chat or your draft"
+              className="rounded bg-[var(--muted-foreground)]/15 px-1.5 py-0.5 text-[0.625rem] font-bold text-[var(--muted-foreground)]"
+            >
+              match
+            </span>
+          )}
+        </span>
+        <span className="flex shrink-0 items-center gap-1">
         <button
           type="button"
           onClick={(e) => {
@@ -281,6 +282,7 @@ function WorldInfoEntryRow({
         >
           {enabled ? <Eye size="0.875rem" /> : <EyeOff size="0.875rem" />}
         </button>
+        </span>
       </div>
 
       {/* Expanded content view */}
