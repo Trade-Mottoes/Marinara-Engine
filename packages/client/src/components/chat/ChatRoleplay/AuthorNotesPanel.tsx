@@ -5,8 +5,7 @@
 // list of toggleable notes. Active notes compose into the same
 // injection block at the same depth — server-side composer in
 // services/author-notes/compose.ts handles both the legacy
-// `authorNotes` string and the new `authorNoteFragments` array (the
-// storage key kept its legacy name to avoid a metadata migration), so
+// `authorNotes` string and the new `authorNoteEntries` array, so
 // chats untouched by this UI keep working bit-identically.
 //
 // Lives in its own file (rather than alongside upstream's panel) so
@@ -69,7 +68,7 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
     setDepthStr(String(externalDepth));
     baselineRef.current = { entries: externalEntries, depth: externalDepth };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatMeta.authorNoteFragments, chatMeta.authorNotes, chatMeta.authorNotesDepth]);
+  }, [chatMeta.authorNoteEntries, chatMeta.authorNotes, chatMeta.authorNotesDepth]);
 
   // Flush-on-unmount: catches in-flight content edits the user hadn't blurred
   // out of yet when the popover dismissed. Applies pipe-split here too so a
@@ -82,7 +81,7 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
       const split = splitEntriesByPipe(e);
       const base = baselineRef.current;
       if (!entriesEqual(split, base.entries) || d !== base.depth) {
-        mutateRef.current({ id: capturedChatId, authorNoteFragments: split, authorNotesDepth: d });
+        mutateRef.current({ id: capturedChatId, authorNoteEntries: split, authorNotesDepth: d });
       }
     };
   }, [chatId]);
@@ -92,7 +91,7 @@ export function AuthorNotesPanel({ chatId, chatMeta, isMobile, onClose }: Author
   const persist = useCallback(
     (next: AuthorsNoteEntry[], nextDepth?: number) => {
       const depth = nextDepth ?? (parseInt(depthStr, 10) || 4);
-      updateMeta.mutate({ id: chatId, authorNoteFragments: next, authorNotesDepth: depth });
+      updateMeta.mutate({ id: chatId, authorNoteEntries: next, authorNotesDepth: depth });
       baselineRef.current = { entries: next, depth };
     },
     [chatId, depthStr, updateMeta],
@@ -371,7 +370,7 @@ function EntryRow({
 // ──────────────────────────────────────────────
 
 function hydrateEntries(meta: Record<string, any>): AuthorsNoteEntry[] {
-  const raw = meta?.authorNoteFragments;
+  const raw = meta?.authorNoteEntries;
   if (Array.isArray(raw)) {
     return raw
       .filter((e) => e && typeof e === "object" && typeof e.id === "string" && typeof e.content === "string")

@@ -14,9 +14,7 @@ import type { AuthorsNoteEntry } from "@marinara-engine/shared";
 export function composeAuthorNotes(meta: Record<string, unknown> | undefined | null): string {
   if (!meta) return "";
 
-  // Storage key is still `authorNoteFragments` for back-compat — see
-  // shared/types/author-notes.ts for the rationale.
-  const entriesRaw = meta.authorNoteFragments;
+  const entriesRaw = meta.authorNoteEntries;
   if (Array.isArray(entriesRaw) && entriesRaw.length > 0) {
     const composed = entriesRaw
       .filter(isEnabledNonEmptyEntry)

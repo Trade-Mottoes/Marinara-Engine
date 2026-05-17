@@ -8,11 +8,9 @@
 // of in-flight ideas around with quick on/off control rather than
 // cutting and pasting one note into the box at a time.
 //
-// Storage: chat.metadata.authorNoteFragments (legacy storage key —
-// kept as-is so existing chats don't need a metadata migration; the
-// in-code name evolved past "fragments" but the JSON shape didn't).
-// Alongside legacy authorNotes string for backwards compat — composer
-// prefers entries when present, falls back to the string when not.
+// Storage: chat.metadata.authorNoteEntries, alongside upstream's
+// legacy authorNotes string for backwards compat — composer prefers
+// entries when present, falls back to the string when not.
 // ──────────────────────────────────────────────
 
 export interface AuthorsNoteEntry {
