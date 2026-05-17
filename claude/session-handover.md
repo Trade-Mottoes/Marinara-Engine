@@ -41,15 +41,17 @@ When wrapping up a substantive session: write the in-repo handover (this file) A
 
 - **`refactor/summary-dialog`** — RETIRED 2026-05-17. Upstream's PR #938 ("Feat/summary popover metadata") reshaped the same chat-Summary surface; combined with the prior #239 supersession of the paired author-notes refactor, marginal value of our peek-then-edit Modal architecture is too low to justify rebuilding on top of #938. Commented out of `rebuild-integrations.sh` with rationale. **Action: close PR #213 at leisure.**
 
-**Deferred from the v1.6.0 sync (small change → false-positive ~300–550-line conflict against upstream's churn; each needs rebuild-and-bake when revived):**
+**Rebuilt-and-baked 2026-05-17 (full backlog cleared):**
 
-- **`fix/character-memories-recency-cap`** — bug still upstream at `generate.routes.ts:4076`, fix still valuable
-- **`feat/prompt-debug-dumps`** — single-commit diagnostic; upstream's new `LOG_PRESET=prompt-connections` is complementary (live tailing vs file dumps), not a replacement
-- **`feat/author-note-fragments`** — real feature, no upstream equivalent
+The entire deferred + recurring-conflict backlog was rebased or rebuilt against current `pd/main`. Every active branch is now baked. Final rebuild from `pd/main` merges all 11 branches with one tiny 4-line export-conflict (adjacent additions to `shared/src/index.ts` from two feature branches — unavoidable, takes 30 seconds to resolve).
 
-**Rebuilt-and-baked 2026-05-17:**
-
-- **`feat/world-info-interactive`** — REBUILT from scratch on top of current `pd/main` as 2 surgical commits (server pinned/includeDisabled + scan-endpoint diagnostic flags + AN/Summary scan corpus; client `chat/ChatRoleplay/WorldInfoPanel.tsx` with pin/disable/pills/regenerate/stable-order). **Phase A of three** — Phase B (LorebookEntryEditor extraction) and Phase C (pencil quick-edit modal) deferred to follow-up sessions. The original branch's modal-edit affordance is missing for now; users edit entries via the lorebook editor route page in the meantime. Smoke-tested in `pnpm dev` before the swap. The MyBrain detail note (`2026-05-17 World Info Phase A rebuild.md`) carries the per-decision rationale.
+- **`fix/google-provider-no-candidates-crash`** — REBASED onto current pd/main; resolution baked
+- **`fix/agents-panel-enable-toggle`** — REBASED again (had drifted out of date against current pd/main since prior rebase)
+- **`fix/scene-summary-respects-agent-defaults`** — REBASED onto current pd/main; resolution baked
+- **`fix/character-memories-recency-cap`** — REBUILT from scratch (14-line surgical change re-applied to current `generate.routes.ts`, which has reshuffled significantly)
+- **`feat/prompt-debug-dumps`** — REBUILT from scratch; **improvement**: now uses `logger.debug` / `logger.warn` instead of `console.log`/`console.warn` per project's Pino convention
+- **`feat/author-note-fragments`** — REBUILT from scratch (no longer rebased on `feat/scene-conclude-preview`; just lives directly on `pd/main` — the previous dependency-rebase workaround was awkward)
+- **`feat/world-info-interactive`** — Phase A REBUILT earlier today (per MyBrain detail note `2026-05-17 World Info Phase A rebuild.md`). Phases B (LorebookEntryEditor extraction) and C (pencil quick-edit modal) still deferred to follow-up sessions.
 
 **In flight to upstream:**
 
@@ -59,27 +61,25 @@ When wrapping up a substantive session: write the in-repo handover (this file) A
 
 - **PR #213** — `refactor/author-notes-dialog` — opened but not merged. Now also: `refactor/summary-dialog` retired (no PR was open for it; just close the branch at leisure).
 
-**On bench, merged into test/general this sync, ready when wait-for-engagement window opens:**
+**On bench, all merged into test/general 2026-05-17 (every branch baked on current pd/main):**
 
 ```
 fix/google-provider-thinking-budget          (high-impact Gemini fix, narrow)
-fix/google-provider-no-candidates-crash      (defensive parser hardening — RECURRING SMALL CONFLICT, rebase-and-bake candidate)
-fix/agents-panel-enable-toggle               (restores UI for enabling agents — REBASED 2026-05-07, still hitting small conflicts as upstream edits area)
+fix/google-provider-no-candidates-crash      (defensive parser hardening — REBASED 2026-05-17)
+fix/agents-panel-enable-toggle               (restores UI for enabling agents — REBASED 2026-05-17, retired the recurring conflict)
 fix/conversation-default-preset              (stop auto-assigning preset to convo chats)
+fix/character-memories-recency-cap           (don't drop memories after midnight — REBUILT 2026-05-17)
 fix/sidecar-honour-explicit-maxtokens        (Math.max semantics — see below)
-fix/scene-summary-respects-agent-defaults    (utility-task chain + sidecar sentinel, composed with #739 — RECURRING CONFLICT, rebase-and-bake candidate)
-feat/world-info-interactive                  (REBUILT 2026-05-17 Phase A — clean rebuild on pd/main, merges clean)
-feat/scene-conclude-preview                  (preview-then-commit End Scene Dialog — CLEAN merge even after big sync)
+fix/scene-summary-respects-agent-defaults    (utility-task chain + sidecar sentinel — REBASED 2026-05-17)
+feat/prompt-debug-dumps                      (opt-in MARINARA_DUMP_PROMPTS diagnostic — REBUILT 2026-05-17, now uses Pino logger)
+feat/world-info-interactive                  (REBUILT 2026-05-17 Phase A — pin/disable/pills/regenerate/stable-order)
+feat/scene-conclude-preview                  (preview-then-commit End Scene Dialog — additive-file architecture, always-clean)
+feat/author-note-fragments                   (ordered toggleable Author's Notes fragments — REBUILT 2026-05-17)
 ```
 
-**Deferred branches (NOT in test/general but still on origin, awaiting rebuild-and-bake):**
-
-```
-fix/character-memories-recency-cap
-feat/prompt-debug-dumps
-feat/author-note-fragments
-feat/world-info-interactive Phase B+C  (the LorebookEntryEditor extraction + pencil-modal glue)
-```
+**Deferred phases:**
+- `feat/world-info-interactive` Phase B (LorebookEntryEditor extraction against current upstream entry shape — ~45-60 min, pure refactor)
+- `feat/world-info-interactive` Phase C (pencil-modal glue, ~30 min after Phase B)
 
 **Branch-state notes:**
 
