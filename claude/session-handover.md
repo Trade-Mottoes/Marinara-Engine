@@ -1,8 +1,8 @@
 # Marinara-Engine — Session Handover
 
-Most recent session: 2026-05-07. The state of the world for the next Claude.
+Most recent session: 2026-05-17. The state of the world for the next Claude.
 
-Previous session: late Apr 2026 (work logged below the "Critical learnings" header still reflects that earlier work).
+Previous sessions: 2026-05-06/07 (notes-system setup + the prior sync), late Apr 2026 (work logged below the "Critical learnings" header still reflects that earlier work).
 
 ## Personal-project layer: MyBrain outer index
 
@@ -28,34 +28,56 @@ When wrapping up a substantive session: write the in-repo handover (this file) A
 
 ## Branch state at end of session
 
-**Sync baseline:** `main` and `pd/main` both at **`12b3ff8`** (Pasta-Devs PR #485). Brought forward from `19e0713` this session — 157 upstream commits absorbed in one fast-forward.
+**Sync baseline:** `main` and `pd/main` both at **`c247b2eb`** (post-v1.6.0). Brought forward from `19e0713` on 2026-05-17 — **477 upstream commits in 10 days**, including the v1.6.0 release. Much larger sync than prior cycles.
 
 **Merged upstream (permanent wins):**
 
 - **PR #225** — `fix/lorebooks-ignored-without-preset` ✅ in `pd/main`. Branch removed.
 - **PR #245** — `fix/lorebook-scan-skips-empty-chats` ✅ in `pd/main`. Branch removed; commented out of `rebuild-integrations.sh`.
 - **PR #239 (upstream)** — landed an alternative author-notes save-race fix that supersedes our `refactor/author-notes-dialog`. Our branch is now redundant; commented out of `rebuild-integrations.sh`.
+- **PR #739 (upstream)** — landed a `provider.maxTokensOverrideValue ?? 1024` graft in scene summary maxTokens. **Different bug** than our `fix/scene-summary-respects-agent-defaults`; the two compose cleanly. Our branch absorbed the graft during this sync's merge resolution.
+
+**Retired this session:**
+
+- **`refactor/summary-dialog`** — RETIRED 2026-05-17. Upstream's PR #938 ("Feat/summary popover metadata") reshaped the same chat-Summary surface; combined with the prior #239 supersession of the paired author-notes refactor, marginal value of our peek-then-edit Modal architecture is too low to justify rebuilding on top of #938. Commented out of `rebuild-integrations.sh` with rationale. **Action: close PR #213 at leisure.**
+
+**Deferred this session (small change → false-positive ~300–550-line conflict against upstream's churn; each needs rebuild-and-bake when revived):**
+
+- **`fix/character-memories-recency-cap`** — bug still upstream at `generate.routes.ts:4076`, fix still valuable
+- **`feat/prompt-debug-dumps`** — single-commit diagnostic; upstream's new `LOG_PRESET=prompt-connections` is complementary (live tailing vs file dumps), not a replacement
+- **`feat/author-note-fragments`** — real feature, no upstream equivalent
+
+**Deferred this session — NEXT FOCUS:**
+
+- **`feat/world-info-interactive`** — 5-file conflict against upstream's v1.6.0 lorebook overhaul (folders, ReDoS hardening, keyword-test panel, budget-skip visibility, timing states sticky/cooldown/delay, character-book sync, image upload, vectorization exclusions). Some of our additions may now be redundant; others compose orthogonally. **Wants a dedicated reconciliation session.**
 
 **In flight to upstream:**
 
-- _(none — wait-for-engagement window is open, queue below is ready to draw from)_
+- _(none — wait-for-engagement window is open)_
 
 **Open / inactive:**
 
-- **PR #213** — `refactor/author-notes-dialog` — opened but not merged. Upstream landed a different save-race fix (#239). Redundant. Can be closed/deleted at leisure.
+- **PR #213** — `refactor/author-notes-dialog` — opened but not merged. Now also: `refactor/summary-dialog` retired (no PR was open for it; just close the branch at leisure).
 
-**On bench (not yet PR'd, ready when wait-for-engagement window opens):**
+**On bench, merged into test/general this sync, ready when wait-for-engagement window opens:**
 
 ```
 fix/google-provider-thinking-budget          (high-impact Gemini fix, narrow)
 fix/google-provider-no-candidates-crash      (defensive parser hardening)
-fix/agents-panel-enable-toggle               (restores UI for enabling agents — REBASED THIS SESSION onto pd/main 12b3ff8, force-pushed origin)
+fix/agents-panel-enable-toggle               (restores UI for enabling agents — REBASED 2026-05-07, still hitting small conflicts as upstream edits area)
 fix/conversation-default-preset              (stop auto-assigning preset to convo chats)
-fix/character-memories-recency-cap           (don't drop memories after midnight)
 fix/sidecar-honour-explicit-maxtokens        (Math.max semantics — see below)
-fix/scene-summary-respects-agent-defaults    (utility-task chain + sidecar sentinel)
-refactor/summary-dialog                      (paired with author-notes refactor)
-feat/prompt-debug-dumps                      (opt-in diagnostic, debug aid)
+fix/scene-summary-respects-agent-defaults    (utility-task chain + sidecar sentinel, composed with #739)
+feat/scene-conclude-preview                  (preview-then-commit End Scene Dialog — CLEAN merge even after big sync)
+```
+
+**Deferred branches (NOT in test/general but still on origin, awaiting rebuild-and-bake):**
+
+```
+fix/character-memories-recency-cap
+feat/prompt-debug-dumps
+feat/world-info-interactive    (= NEXT FOCUS)
+feat/author-note-fragments
 ```
 
 **Branch-state notes:**
@@ -103,7 +125,43 @@ fork/tooling                      (orphan — scripts + claude/ notes backup)
 - `.gitignore` excludes `.claude/` (Claude Code's per-project state — has personal allowlists/hooks).
 - Update workflow: edit in main worktree → `./scripts/publish-tooling.sh` → done.
 
-## Critical learnings from THIS session (2026-05-06 — upstream sync)
+## Critical learnings from THIS session (2026-05-17 — v1.6.0 sync)
+
+### The "small change, massive false-positive conflict" pattern
+
+When upstream's churn rate is high in files our branches touch (in this sync: `generate.routes.ts` got reshuffled by many small commits), git's merge diff can't find clean context anchors. A 10–50-line surgical change in our branch produces a 300–550-line conflict region — the actual disagreements are sparse inside that block, but they're surrounded by hundreds of lines of upstream-only changes that git can't align.
+
+**Why this matters operationally:** resolving 500 lines of mostly-false-positive markers in-place on `test/general` is high-effort low-value. AND the resolution doesn't survive the next rebuild because `test/general` gets wiped. So you'd be paying that cost on every sync.
+
+**The right answer per affected branch: rebuild-and-bake.** Branch from current `pd/main`, re-apply the small change directly to the new file (which now has all of upstream's surrounding changes baked in), force-push. Future merges replay cleanly.
+
+**The wrong place to do it: mid-sync.** Each rebuild-and-bake is its own focused mini-session, with its own force-push authorisation. Doing 3 of them inside a sync session is too much. **Defer them, batch them, schedule them.**
+
+Branches that need rebuild-and-bake as of 2026-05-17:
+- `fix/character-memories-recency-cap` (14-line fix, 296-line false-positive conflict)
+- `feat/prompt-debug-dumps` (single-commit feature, 557-line false-positive conflict)
+- `feat/author-note-fragments` (rebased on `feat/scene-conclude-preview`, 546-line false-positive)
+- `feat/world-info-interactive` — different shape (5 files, real conflicts not false-positives), but same disposition: needs dedicated session
+
+### The additive-file architecture pays off (proof point)
+
+`feat/scene-conclude-preview` introduces a substantial new feature (preview-then-commit End Scene Dialog) and **merged with ZERO conflicts** through the v1.6.0 sync. Why: all the new code lives in additive files — `chat/ChatRoleplay/EndSceneDialog.tsx`, `routes/scene-conclude-preview.routes.ts`, `shared/src/types/scene-preview.ts`. The integration with existing files is a one-line lazy import in `ChatArea.tsx` and a one-line route registration in `routes/index.ts`.
+
+**Continue applying this pattern for opinionated UI work.** Whenever feasible: new file under `chat/ChatRoleplay/`, lazy-import from the existing surface. Lazy import = single-line change = no merge conflict.
+
+### `pnpm db:push` doesn't exist
+
+Top-level `CLAUDE.md` mentions `pnpm db:push` as a verification step. **There is no such script.** Schema is applied at server startup via `packages/server/src/db/migrate.ts`. Skip the db:push step; trust startup migration; verify with `pnpm check` only. Worth updating the top-level CLAUDE.md to reflect this, but it's tracked upstream so a fork-only edit isn't appropriate — the right move is either a PR upstream to fix the doc, or a note in this file (here).
+
+### Rebase ours/theirs semantics — easy to invert
+
+During a `git rebase` (NOT `git merge`):
+- `git checkout --ours <file>` → take the branch you're rebasing ONTO (upstream HEAD)
+- `git checkout --theirs <file>` → take the commit being replayed
+
+This is the OPPOSITE of `git merge` semantics. I inverted it once this sync and briefly thought upstream had merged our fix (it hadn't). **Always sanity-check with `git show <ref>:<file>`** after a `--ours`/`--theirs` resolution before drawing conclusions.
+
+## Critical learnings from prior sessions (2026-05-06 — upstream sync)
 
 ### feat/world-info-interactive lost its in-route entry-editor sub-view to upstream
 
@@ -220,7 +278,7 @@ Drop this file (and `claude/marinara-pr-workflow.md` for PR prep, `claude/featur
    git branch --list "fix/*" "feat/*" "refactor/*" "fork/*"   # see all branches
    git worktree list                                  # confirm Marinara-tooling worktree exists
    ```
-   Baseline at end of previous session: `main` and `pd/main` both at **12b3ff8**. If `git log main..pd/main` shows commits, an upstream sync is pending — see "Critical learnings from THIS session" for the workflow that worked.
+   Baseline at end of previous session: `main` and `pd/main` both at **c247b2eb** (v1.6.0). If `git log main..pd/main` shows substantial commits (~hundreds), an upstream sync is pending — and the false-positive-conflict pattern documented above is very likely to bite. Read "Critical learnings from THIS session" first; consider the rebuild-and-bake budget before starting merges.
 
 2. **Start any commit work with branch-check** (the wrong-branch-commit footgun from earlier sessions):
    ```bash
