@@ -10,6 +10,7 @@ import type { FastifyInstance } from "fastify";
 import { logger } from "../lib/logger.js";
 import { readdirSync, existsSync } from "fs";
 import { join, extname } from "path";
+import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
@@ -17,18 +18,20 @@ import { createGameStateStorage } from "../services/storage/game-state.storage.j
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { stripConversationPromptTimestamps } from "../services/conversation/transcript-sanitize.js";
 import { getCharacterDescriptionWithExtensions } from "../services/prompt/index.js";
+import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../services/llm/local-sidecar.js";
 import { DATA_DIR } from "../utils/data-dir.js";
 import type { ChatCompletionResult, ChatMessage } from "../services/llm/base-provider.js";
-import type {
-  SceneCreateRequest,
-  SceneCreateResponse,
-  SceneConcludeRequest,
-  SceneConcludeResponse,
-  SceneForkRequest,
-  SceneForkResponse,
-  ScenePlanRequest,
-  ScenePlanResponse,
-  SceneFullPlan,
+import {
+  LOCAL_SIDECAR_CONNECTION_ID,
+  type SceneCreateRequest,
+  type SceneCreateResponse,
+  type SceneConcludeRequest,
+  type SceneConcludeResponse,
+  type SceneForkRequest,
+  type SceneForkResponse,
+  type ScenePlanRequest,
+  type ScenePlanResponse,
+  type SceneFullPlan,
 } from "@marinara-engine/shared";
 
 const BG_DIR = join(DATA_DIR, "backgrounds");
@@ -76,6 +79,60 @@ async function resolveConnection(
   if (!baseUrl) throw new Error("No base URL configured for this connection");
 
   return { conn, baseUrl };
+}
+
+/**
+ * Resolve the connection for a UTILITY task — scene summary, scene plan
+ * generation, or any background LLM work that's conceptually agent-flavoured
+ * rather than chat-flavoured.
+ *
+ * Resolution order matches `chats.routes.ts /generate-summary`:
+ *   1. Per-call override (req.body.connectionId)
+ *   2. Chat-summary agent's own connection override
+ *   3. Default-for-agents connection
+ *   4. The chat's active connection (last resort, what resolveConnection used to do)
+ *
+ * Without this, scene/conclude was inheriting the scene chat's connection at
+ * scene-create time and using whatever model the user picked for creative
+ * roleplay — often a thinking-heavy or NSFW-restricted model that's a poor
+ * fit for utility summarisation. Users had set "default for all agents" to
+ * a small/local model expecting it to apply here too.
+ */
+async function resolveUtilityConnection(
+  connections: ReturnType<typeof createConnectionsStorage>,
+  agentsStore: ReturnType<typeof createAgentsStorage>,
+  connId: string | null | undefined,
+  chatConnectionId: string | null,
+) {
+  if (!connId) {
+    // Skip the chat-summary agent's connection if the agent is disabled —
+    // a disabled agent's connection setting is stale/forgotten config and
+    // shouldn't silently override the user's "default for all agents".
+    // This was a real footgun: a user disables the chat-summary agent to
+    // stop auto-summaries, then later sets default-for-agents to LM Studio,
+    // expecting summary tasks to route there. Without this guard, the
+    // disabled agent's old Gemini connectionId still wins.
+    const summaryAgentCfg = await agentsStore.getByType("chat-summary");
+    const summaryAgentEnabled = summaryAgentCfg?.enabled !== "false";
+    if (summaryAgentEnabled && summaryAgentCfg?.connectionId) {
+      connId = summaryAgentCfg.connectionId;
+    } else {
+      const defaultAgentConn = await connections.getDefaultForAgents();
+      if (defaultAgentConn?.id) connId = defaultAgentConn.id;
+    }
+  }
+  // The local sidecar uses a sentinel ID instead of a row in api_connections.
+  // chats.routes.ts /generate-summary handles the same sentinel by routing to
+  // getLocalSidecarProvider() directly; mirror that here so that an agent
+  // configured for "Local Model (sidecar)" doesn't fail with "API connection
+  // not found" when scene-conclude looks the sentinel up in the connections
+  // table.
+  const finalId = connId ?? chatConnectionId;
+  if (finalId === LOCAL_SIDECAR_CONNECTION_ID) {
+    return { kind: "sidecar" as const };
+  }
+  const { conn, baseUrl } = await resolveConnection(connections, connId, chatConnectionId);
+  return { kind: "connection" as const, conn, baseUrl };
 }
 
 async function buildCharacterContext(chars: ReturnType<typeof createCharactersStorage>, characterIds: string[]) {
@@ -225,6 +282,7 @@ export async function sceneRoutes(app: FastifyInstance) {
   const connections = createConnectionsStorage(app.db);
   const chars = createCharactersStorage(app.db);
   const gsStorage = createGameStateStorage(app.db);
+  const agentsStore = createAgentsStorage(app.db);
 
   // ───────────────────────── CREATE ─────────────────────────
   // Creates a new roleplay chat for the scene using the full plan,
@@ -339,16 +397,36 @@ export async function sceneRoutes(app: FastifyInstance) {
     const originChatId = typeof sceneMeta.sceneOriginChatId === "string" ? sceneMeta.sceneOriginChatId : null;
     if (!originChatId) return reply.status(400).send({ error: "Not a scene chat (no origin)" });
 
-    // Resolve connection
-    const { conn, baseUrl } = await resolveConnection(connections, connectionId, sceneChat.connectionId);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
+    // Resolve connection — utility-task chain (chat-summary agent override
+    // → default-for-agents → scene chat's connection). See
+    // resolveUtilityConnection above for rationale.
+    const utility = await resolveUtilityConnection(
+      connections,
+      agentsStore,
+      connectionId,
+      sceneChat.connectionId,
     );
+    let provider;
+    let model: string;
+    if (utility.kind === "sidecar") {
+      provider = getLocalSidecarProvider();
+      model = LOCAL_SIDECAR_MODEL;
+      console.log(`[scene/conclude] using local sidecar`);
+    } else {
+      const { conn, baseUrl } = utility;
+      console.log(
+        `[scene/conclude] using connection=${conn.name ?? conn.id} provider=${conn.provider} model=${conn.model}`,
+      );
+      provider = createLLMProvider(
+        conn.provider,
+        baseUrl,
+        conn.apiKey,
+        conn.maxContext,
+        conn.openrouterProvider,
+        conn.maxTokensOverride,
+      );
+      model = conn.model;
+    }
 
     // Build context
     const characterIds = parseCharacterIds(sceneChat.characterIds);
@@ -406,21 +484,18 @@ export async function sceneRoutes(app: FastifyInstance) {
     const summaryMaxTokens = provider.maxTokensOverrideValue ?? 1024;
     try {
       result = await provider.chatComplete(summaryPrompt, {
-        model: conn.model,
+        model,
         temperature: 0.8,
         maxTokens: summaryMaxTokens,
       });
     } catch (error) {
-      logger.error(
-        { err: error, sceneChatId, provider: conn.provider, model: conn.model },
-        "[scene] Failed to generate scene summary",
-      );
+      logger.error({ err: error, sceneChatId, model }, "[scene] Failed to generate scene summary");
       return reply.status(502).send({ error: `Scene summary failed: ${getErrorMessage(error)}` });
     }
 
     const summary = (result.content ?? "").trim();
     if (!summary) {
-      logger.warn({ sceneChatId, provider: conn.provider, model: conn.model }, "[scene] Scene summary was empty");
+      logger.warn({ sceneChatId, model }, "[scene] Scene summary was empty");
       return reply.status(502).send({ error: "Scene summary failed: the model returned an empty response." });
     }
 
