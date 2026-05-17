@@ -23,12 +23,26 @@
 //   ✓ Always-visible action icons, muted at rest
 //   ✓ Budget-skip notice (from upstream #814)
 //
-// Deferred to Phase C: pencil-icon quick-edit modal (depends on Phase B's
-// LorebookEntryEditor extraction).
+// Phase C wiring (2026-05-17): pencil-icon button on each row opens the
+// LorebookEntryQuickEditModal. Modal reuses the route-page entry-edit form
+// via the LorebookEntryEditor public-API alias added in Phase B.
 // ──────────────────────────────────────────────
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ChevronDown, ChevronRight, Eye, EyeOff, Globe, Loader2, Pin, PinOff, RefreshCw, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  Globe,
+  Loader2,
+  Pencil,
+  Pin,
+  PinOff,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { useChatStore } from "../../../stores/chat.store";
 import { useChat, useUpdateChatMetadata } from "../../../hooks/use-chats";
 import {
@@ -36,6 +50,7 @@ import {
   type ActiveLorebookEntry,
   type BudgetSkippedLorebookEntry,
 } from "../../../hooks/use-lorebooks";
+import { LorebookEntryQuickEditModal } from "../../modals/LorebookEntryQuickEditModal";
 
 // ────────────────────────────────────────────────────────────────────
 // Budget-skip notice (from upstream #814). Inlined here so this panel
@@ -124,11 +139,13 @@ function WorldInfoEntryRow({
   entry,
   onToggleEnabled,
   onTogglePinned,
+  onEdit,
   toggleBusy,
 }: {
   entry: ActiveLorebookEntry;
   onToggleEnabled: (entryId: string, nextEnabled: boolean) => void;
   onTogglePinned: (entryId: string, nextPinned: boolean) => void;
+  onEdit: (entry: ActiveLorebookEntry) => void;
   toggleBusy: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -213,6 +230,17 @@ function WorldInfoEntryRow({
           and the row's hover state lifts them to full opacity. Active overrides
           (pinned, user-disabled) keep their colour regardless of hover. */}
       <div className="mt-1 flex items-center justify-end gap-1">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(entry);
+          }}
+          title="Edit this entry (name, content, keys, all fields) — affects every chat using this lorebook"
+          className="shrink-0 rounded-md p-1 text-[var(--muted-foreground)] opacity-50 transition-all hover:bg-[var(--background)]/40 hover:text-[var(--foreground)] group-hover:opacity-100"
+        >
+          <Pencil size="0.875rem" />
+        </button>
         <button
           type="button"
           disabled={toggleBusy}
@@ -405,6 +433,26 @@ export function WorldInfoPanel({
     patchOverride(entryId, { pinned: nextPinned });
   };
 
+  // Phase C — pencil-icon opens the quick-edit modal. We track lorebookId
+  // alongside entryId because the modal needs both to fetch the entry and
+  // wire updates. Both go null when the modal closes; the modal's `open`
+  // prop is derived from both being non-null.
+  const [editTarget, setEditTarget] = useState<{ lorebookId: string; entryId: string } | null>(null);
+  const handleEdit = (entry: ActiveLorebookEntry) => {
+    setEditTarget({ lorebookId: entry.lorebookId, entryId: entry.id });
+  };
+  const handleCloseEdit = () => {
+    setEditTarget(null);
+    // Refresh the panel after edit closes — the user may have changed keys,
+    // CONST flag, or content, which can change what's activating.
+    qc.invalidateQueries({
+      predicate: (q) => {
+        const k = q.queryKey;
+        return Array.isArray(k) && k[0] === "lorebooks" && k[1] === "active" && k[2] === chatId;
+      },
+    });
+  };
+
   const handleRegen = async () => {
     // Read the chat's CURRENT draft (may have changed since panel opened).
     // The query is keyed by initialDraft; the refetch uses that anchor.
@@ -478,12 +526,18 @@ export function WorldInfoPanel({
                 entry={entry}
                 onToggleEnabled={handleToggle}
                 onTogglePinned={handlePin}
+                onEdit={handleEdit}
                 toggleBusy={updateMeta.isPending}
               />
             ))}
           </div>
         </>
       )}
+      <LorebookEntryQuickEditModal
+        lorebookId={editTarget?.lorebookId ?? null}
+        entryId={editTarget?.entryId ?? null}
+        onClose={handleCloseEdit}
+      />
     </>
   );
 }
