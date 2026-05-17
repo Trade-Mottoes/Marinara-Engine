@@ -85,7 +85,12 @@ const SummaryPopover = lazy(async () => {
 });
 
 const AuthorNotesPanel = lazy(async () => {
-  const module = await import("./ChatRoleplayPanels");
+  // Fork-private: see chat/ChatRoleplay/AuthorNotesPanel.tsx for the
+  // fragments-based panel (ordered toggleable note blocks). Upstream's
+  // AuthorNotesPanel inside ChatRoleplayPanels.tsx is left in place —
+  // dead code from this consumer's perspective — keeping the merge
+  // surface against ChatRoleplayPanels narrow.
+  const module = await import("./ChatRoleplay/AuthorNotesPanel");
   return { default: module.AuthorNotesPanel };
 });
 

@@ -45,6 +45,7 @@ import { createCustomToolsStorage } from "../services/storage/custom-tools.stora
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createRegexScriptsStorage } from "../services/storage/regex-scripts.storage.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
+import { composeAuthorNotes } from "../services/author-notes/compose.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { loadPrompt, CONVERSATION_SELFIE } from "../services/prompt-overrides/index.js";
 import { renderTemplate } from "../services/prompt-overrides/template.js";
@@ -2802,7 +2803,9 @@ export async function generateRoutes(app: FastifyInstance) {
         }
 
         // ── Author's Notes injection ──
-        const authorNotes = (chatMeta.authorNotes as string | undefined)?.trim();
+        // Compose handles both the new fragments shape and the legacy single-
+        // string `authorNotes` field — see services/author-notes/compose.ts.
+        const authorNotes = composeAuthorNotes(chatMeta as Record<string, unknown>);
         if (authorNotes) {
           const authorNotesDepth = (chatMeta.authorNotesDepth as number) ?? 4;
           finalMessages = injectAtDepth(finalMessages, [
