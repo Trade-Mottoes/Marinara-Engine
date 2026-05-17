@@ -34,8 +34,11 @@ export interface LorebookScanResult {
   activatedEntryIds: string[];
   activatedEntries: Array<{ id: string; content: string; matchedKeys: string[] }>;
   budgetSkippedEntries: Array<{ id: string; matchedKeys: string[] }>;
-  /** Updated per-chat entry state overrides (ephemeral countdown). Caller should persist to chat metadata. */
-  updatedEntryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
+  /** Updated per-chat entry state overrides (ephemeral countdown). Caller should persist to chat metadata.
+   *  `pinned: true` forces an entry to activate regardless of scanner result (a per-chat equivalent
+   *  of the global `constant` flag). `enabled: false` silences an entry for this chat without touching
+   *  the lorebook globally. */
+  updatedEntryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean; pinned?: boolean }>;
   /** Updated per-chat timing states for sticky/cooldown/delay. Caller should persist to chat metadata. */
   updatedEntryTimingStates?: Record<string, LorebookEntryTimingState>;
 }
@@ -328,7 +331,7 @@ function lorebookInjectionOrder(a: ActivatedEntry, b: ActivatedEntry): number {
 
 // Lorebook budgets currently use the project-wide chars/4 approximation.
 // This can drift for CJK, emoji, and long-tail vocabulary until a canonical tokenizer is available here.
-function estimateLorebookTokens(content: string): number {
+export function estimateLorebookTokens(content: string): number {
   return Math.ceil(content.length / 4);
 }
 
@@ -728,8 +731,16 @@ export async function processLorebooks(
     /** Cosine similarity threshold for semantic matching (0-1, default 0.3). */
     semanticThreshold?: number;
     /** Per-chat entry state overrides (from chat metadata). When provided, ephemeral
-     *  countdown is tracked here instead of modifying the global entry row. */
-    entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean }>;
+     *  countdown is tracked here instead of modifying the global entry row.
+     *  `pinned: true` forces an entry to activate regardless of scanner result
+     *  (a per-chat equivalent of the global `constant` flag). `enabled: false`
+     *  silences an entry for this chat without touching the lorebook globally. */
+    entryStateOverrides?: Record<string, { ephemeral?: number | null; enabled?: boolean; pinned?: boolean }>;
+    /** When true, entries marked `enabled: false` in the per-chat overrides
+     *  are kept in the result so the UI can display them (greyed/strikethrough)
+     *  rather than silently omit them. Generation should leave this false so
+     *  disabled entries don't reach the prompt. */
+    includeDisabled?: boolean;
     /** Per-chat timing state for sticky/cooldown/delay. */
     entryTimingStates?: Record<string, LorebookEntryTimingState>;
     /** Preview/debug scan: read timing state but do not return mutable timing updates. */
@@ -770,22 +781,37 @@ export async function processLorebooks(
   // Apply per-chat entry state overrides — an entry that was disabled by ephemeral
   // countdown in *this* chat should be excluded, and ephemeral values should
   // reflect the per-chat remaining count rather than the global default.
+  //
+  // `pinned: true` forces an entry to behave like globally-CONST for THIS chat
+  // — we copy `constant: true` onto the entry so the scanner activates it
+  // unconditionally. `enabled: false` is still authoritative (disable wins over
+  // pin) unless the caller explicitly requested `includeDisabled` for UI scans.
   const overrides = options?.entryStateOverrides;
+  const includeDisabled = options?.includeDisabled === true;
   if (overrides) {
     allEntries = allEntries
       .filter((e) => {
         const ov = overrides[e.id];
-        // If per-chat override explicitly disabled this entry, skip it
-        if (ov && ov.enabled === false) return false;
+        // If per-chat override explicitly disabled this entry, skip it —
+        // unless the caller asked to see disabled entries (UI preview).
+        if (ov && ov.enabled === false && !includeDisabled) return false;
         return true;
       })
       .map((e) => {
         const ov = overrides[e.id];
-        if (ov && ov.ephemeral !== undefined) {
+        if (!ov) return e;
+        let next = e;
+        if (ov.ephemeral !== undefined) {
           // Use per-chat ephemeral remaining instead of global value
-          return { ...e, ephemeral: ov.ephemeral };
+          next = { ...next, ephemeral: ov.ephemeral };
         }
-        return e;
+        if (ov.pinned === true && ov.enabled !== false) {
+          // Pinned: force-activate like a CONST entry, but only when the entry
+          // isn't simultaneously user-disabled. Disable always wins over pin so
+          // a user toggling-off-then-leaving-pinned doesn't surprise them.
+          next = { ...next, constant: true };
+        }
+        return next;
       });
   }
 

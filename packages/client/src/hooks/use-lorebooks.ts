@@ -354,6 +354,16 @@ export interface ActiveLorebookEntry {
   lorebookId: string;
   order: number;
   constant: boolean;
+  // Phase A — per-chat diagnostic flags returned by /lorebooks/scan/:chatId.
+  // Optional on the type so the upstream WorldInfoPanel consumer (which
+  // doesn't need them) still type-checks while the new panel uses them.
+  userEnabled?: boolean;
+  userPinned?: boolean;
+  scannerActivated?: boolean;
+  keywordMatched?: boolean;
+  isInjecting?: boolean;
+  matchedKeys?: string[];
+  tokens?: number;
 }
 
 export interface BudgetSkippedLorebookEntry {
@@ -377,10 +387,19 @@ export interface ActiveLorebookScan {
   totalEntries: number;
 }
 
-export function useActiveLorebookEntries(chatId: string | null, enabled = false) {
+export function useActiveLorebookEntries(chatId: string | null, enabled = false, prependDraft = "") {
+  const draft = prependDraft.trim();
   return useQuery({
-    queryKey: lorebookKeys.active(chatId),
-    queryFn: () => api.get<ActiveLorebookScan>(`/lorebooks/scan/${chatId}`),
+    // Keyed by chatId AND draft — a different draft yields a different scan
+    // result, so caching them under separate keys avoids returning stale
+    // panel state when the draft changes.
+    queryKey: [...lorebookKeys.active(chatId), draft],
+    queryFn: () => {
+      const url = draft
+        ? `/lorebooks/scan/${chatId}?prepend=${encodeURIComponent(draft)}`
+        : `/lorebooks/scan/${chatId}`;
+      return api.get<ActiveLorebookScan>(url);
+    },
     enabled: !!chatId && enabled,
     staleTime: 30_000,
   });

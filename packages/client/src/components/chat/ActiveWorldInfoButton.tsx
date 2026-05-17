@@ -6,7 +6,13 @@ import { useActiveLorebookEntries } from "../../hooks/use-lorebooks";
 import { useUIStore } from "../../stores/ui.store";
 
 const WorldInfoPanel = lazy(async () => {
-  const module = await import("./ChatRoleplayPanels");
+  // Fork-private: see chat/ChatRoleplay/WorldInfoPanel.tsx for the
+  // enhanced panel (per-chat pin/disable overrides, C/P/M reason pills,
+  // regenerate-with-draft, isInjecting-driven token count, stable order).
+  // The upstream WorldInfoPanel inside ChatRoleplayPanels.tsx is left in
+  // place — dead code from this consumer's perspective — so the merge
+  // surface against upstream's ChatRoleplayPanels stays narrow.
+  const module = await import("./ChatRoleplay/WorldInfoPanel");
   return { default: module.WorldInfoPanel };
 });
 
