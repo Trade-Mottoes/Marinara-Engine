@@ -4058,12 +4058,19 @@ export async function generateRoutes(app: FastifyInstance) {
         }
 
         // ── Inject character memories into awareness ──
-        // Characters can create "memories" targeting other characters.
-        // These appear in the awareness context and are cleaned up after the day ends.
+        // Characters can create "memories" targeting other characters
+        // (e.g. via scene-conclude in scene.routes.ts). These appear in the
+        // awareness context and are kept indefinitely, with a soft cap of the
+        // most recent N entries per character to prevent unbounded growth.
+        //
+        // Previous behaviour filtered to "today only" AND wrote the pruned
+        // list back to the character — meaning a scene memory created at 11pm
+        // was permanently deleted when the user came back at 1am the next day.
+        // Characters appeared to forget recent scenes overnight. Now we keep
+        // the most recent CHARACTER_MEMORY_CAP entries instead.
         if (chatMode === "conversation") {
+          const CHARACTER_MEMORY_CAP = 10;
           const memoryLines: string[] = [];
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
 
           for (const cid of characterIds) {
             const charRow = await chars.getById(cid);
@@ -4073,10 +4080,14 @@ export async function generateRoutes(app: FastifyInstance) {
               charData.extensions?.characterMemories ?? [];
             if (memories.length === 0) continue;
 
-            // Filter: keep only memories from today or later
-            const validMemories = memories.filter((m) => new Date(m.createdAt) >= today);
+            // Cap by recency — sort newest-first then take the top N. Older
+            // memories beyond the cap are dropped from the awareness injection
+            // AND pruned from storage so the array doesn't grow unbounded.
+            const sorted = [...memories].sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+            );
+            const validMemories = sorted.slice(0, CHARACTER_MEMORY_CAP);
 
-            // Clean up expired memories if any were removed
             if (validMemories.length !== memories.length) {
               const extensions = { ...(charData.extensions ?? {}), characterMemories: validMemories };
               await chars.update(cid, { extensions } as any);
