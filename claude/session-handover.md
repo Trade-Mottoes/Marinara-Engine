@@ -41,15 +41,15 @@ When wrapping up a substantive session: write the in-repo handover (this file) A
 
 - **`refactor/summary-dialog`** — RETIRED 2026-05-17. Upstream's PR #938 ("Feat/summary popover metadata") reshaped the same chat-Summary surface; combined with the prior #239 supersession of the paired author-notes refactor, marginal value of our peek-then-edit Modal architecture is too low to justify rebuilding on top of #938. Commented out of `rebuild-integrations.sh` with rationale. **Action: close PR #213 at leisure.**
 
-**Deferred this session (small change → false-positive ~300–550-line conflict against upstream's churn; each needs rebuild-and-bake when revived):**
+**Deferred from the v1.6.0 sync (small change → false-positive ~300–550-line conflict against upstream's churn; each needs rebuild-and-bake when revived):**
 
 - **`fix/character-memories-recency-cap`** — bug still upstream at `generate.routes.ts:4076`, fix still valuable
 - **`feat/prompt-debug-dumps`** — single-commit diagnostic; upstream's new `LOG_PRESET=prompt-connections` is complementary (live tailing vs file dumps), not a replacement
 - **`feat/author-note-fragments`** — real feature, no upstream equivalent
 
-**Deferred this session — NEXT FOCUS:**
+**Rebuilt-and-baked 2026-05-17:**
 
-- **`feat/world-info-interactive`** — 5-file conflict against upstream's v1.6.0 lorebook overhaul (folders, ReDoS hardening, keyword-test panel, budget-skip visibility, timing states sticky/cooldown/delay, character-book sync, image upload, vectorization exclusions). Some of our additions may now be redundant; others compose orthogonally. **Wants a dedicated reconciliation session.**
+- **`feat/world-info-interactive`** — REBUILT from scratch on top of current `pd/main` as 2 surgical commits (server pinned/includeDisabled + scan-endpoint diagnostic flags + AN/Summary scan corpus; client `chat/ChatRoleplay/WorldInfoPanel.tsx` with pin/disable/pills/regenerate/stable-order). **Phase A of three** — Phase B (LorebookEntryEditor extraction) and Phase C (pencil quick-edit modal) deferred to follow-up sessions. The original branch's modal-edit affordance is missing for now; users edit entries via the lorebook editor route page in the meantime. Smoke-tested in `pnpm dev` before the swap. The MyBrain detail note (`2026-05-17 World Info Phase A rebuild.md`) carries the per-decision rationale.
 
 **In flight to upstream:**
 
@@ -63,11 +63,12 @@ When wrapping up a substantive session: write the in-repo handover (this file) A
 
 ```
 fix/google-provider-thinking-budget          (high-impact Gemini fix, narrow)
-fix/google-provider-no-candidates-crash      (defensive parser hardening)
+fix/google-provider-no-candidates-crash      (defensive parser hardening — RECURRING SMALL CONFLICT, rebase-and-bake candidate)
 fix/agents-panel-enable-toggle               (restores UI for enabling agents — REBASED 2026-05-07, still hitting small conflicts as upstream edits area)
 fix/conversation-default-preset              (stop auto-assigning preset to convo chats)
 fix/sidecar-honour-explicit-maxtokens        (Math.max semantics — see below)
-fix/scene-summary-respects-agent-defaults    (utility-task chain + sidecar sentinel, composed with #739)
+fix/scene-summary-respects-agent-defaults    (utility-task chain + sidecar sentinel, composed with #739 — RECURRING CONFLICT, rebase-and-bake candidate)
+feat/world-info-interactive                  (REBUILT 2026-05-17 Phase A — clean rebuild on pd/main, merges clean)
 feat/scene-conclude-preview                  (preview-then-commit End Scene Dialog — CLEAN merge even after big sync)
 ```
 
@@ -76,8 +77,8 @@ feat/scene-conclude-preview                  (preview-then-commit End Scene Dial
 ```
 fix/character-memories-recency-cap
 feat/prompt-debug-dumps
-feat/world-info-interactive    (= NEXT FOCUS)
 feat/author-note-fragments
+feat/world-info-interactive Phase B+C  (the LorebookEntryEditor extraction + pencil-modal glue)
 ```
 
 **Branch-state notes:**

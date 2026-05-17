@@ -27,14 +27,17 @@ BRANCHES=(
 #   producing ~550-line conflict on rebuild. Upstream's LOG_PRESET=
 #   prompt-connections is a complementary mechanism (live log tailing vs
 #   file dumps), not a replacement. Needs rebuild-and-bake when revived.
-# feat/world-info-interactive — DEFERRED 2026-05-17, NEXT FOCUS
-#   Five-file conflict surface (ChatRoleplaySurface, LorebookEditor,
-#   use-lorebooks, lorebooks.routes, lorebook/index) against upstream's
-#   v1.6.0 lorebook work: folders, ReDoS hardening, keyword-test panel,
-#   budget-skip visibility, timing states (sticky/cooldown/delay),
-#   character-book sync, image upload, vectorization exclusions. Some of
-#   our additions may now be redundant; others compose orthogonally.
-#   Wants a dedicated session with careful surgery, not blind merge.
+# feat/world-info-interactive — REBUILT 2026-05-17 (Phase A)
+#   Was deferred earlier this session due to the 5-file conflict surface
+#   against upstream's v1.6.0 lorebook work. Rebuilt from scratch on top
+#   of current pd/main as 2 surgical commits (server pinned/includeDisabled
+#   + scan-endpoint diagnostic flags + AN/Summary scan corpus; client
+#   chat/ChatRoleplay/WorldInfoPanel.tsx with pin/disable/pills/regenerate/
+#   stable-order). Phase B (LorebookEntryEditor extraction) and Phase C
+#   (pencil quick-edit modal) deferred to follow-up sessions — the original
+#   branch's modal-edit affordance is missing for now; users edit entries
+#   via the lorebook editor route page in the meantime.
+  feat/world-info-interactive
   feat/scene-conclude-preview
 # feat/author-note-fragments — DEFERRED 2026-05-17
 #   Single-feature branch (rebased on feat/scene-conclude-preview)
