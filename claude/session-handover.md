@@ -51,7 +51,7 @@ The entire deferred + recurring-conflict backlog was rebased or rebuilt against 
 - **`fix/character-memories-recency-cap`** — REBUILT from scratch (14-line surgical change re-applied to current `generate.routes.ts`, which has reshuffled significantly)
 - **`feat/prompt-debug-dumps`** — REBUILT from scratch; **improvement**: now uses `logger.debug` / `logger.warn` instead of `console.log`/`console.warn` per project's Pino convention
 - **`feat/author-note-fragments`** — REBUILT from scratch (no longer rebased on `feat/scene-conclude-preview`; just lives directly on `pd/main` — the previous dependency-rebase workaround was awkward)
-- **`feat/world-info-interactive`** — Phase A REBUILT earlier today (per MyBrain detail note `2026-05-17 World Info Phase A rebuild.md`). Phases B (LorebookEntryEditor extraction) and C (pencil quick-edit modal) still deferred to follow-up sessions.
+- **`feat/world-info-interactive`** — Phase A REBUILT earlier today, then Phases B + C landed the same day (fast-forward push). Full original UX restored: per-chat pin/disable, C/P/M pills, regenerate-with-draft, isInjecting token count, stable order, AND pencil-icon quick-edit modal. Three smoke-test fix commits stacked on top of Phase C for the modal positioning + event-isolation + backdrop-click interaction edges. See MyBrain `2026-05-17 Phase B+C wire-up.md` for full per-bug rationale and the three-categories-of-failure pattern that surfaced.
 
 **In flight to upstream:**
 
@@ -77,9 +77,10 @@ feat/scene-conclude-preview                  (preview-then-commit End Scene Dial
 feat/author-note-fragments                   (ordered toggleable Author's Notes fragments — REBUILT 2026-05-17)
 ```
 
-**Deferred phases:**
-- `feat/world-info-interactive` Phase B (LorebookEntryEditor extraction against current upstream entry shape — ~45-60 min, pure refactor)
-- `feat/world-info-interactive` Phase C (pencil-modal glue, ~30 min after Phase B)
+**Deferred phases:** _(none — Phases B + C landed 2026-05-17)_
+
+**Latent bug worth flagging (out of scope, possible upstream PR opportunity):**
+The shared `packages/client/src/components/ui/Modal.tsx` component's backdrop-click-to-close mechanism is broken. Its overlay onClick checks `e.target === overlayRef.current`, but Modal renders an absolutely-positioned backdrop on top of the overlay, so backdrop clicks have the BACKDROP as their target — the check never matches → onClose never fires. Every Modal consumer in the app inherits this; some may rely on the accidental "only Escape and X close" behaviour. Worth an audit + small PR upstream if Modal hasn't been redesigned in newer pd/main. Our `LorebookEntryQuickEditModal` works around it scoped at the consumer.
 
 **Branch-state notes:**
 
