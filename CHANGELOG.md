@@ -9,6 +9,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 - Added optional image generation for the Background agent so Roleplay can create and reuse missing scene backgrounds from an agent-selected image connection.
 - Reworked the avatar crop tool into a square-region selector with corner handles + interior pan, so users can pick the exact part of the source image that becomes the circle avatar. Replaces the prior zoom + pan slider on Character avatars and adds the same widget to Personas (previously had no crop UI). The original avatar file is never overwritten — the Roleplay glued side panel still shows the full portrait.
 - Added in-game access to Game Assets from the top-right game controls, including per-game asset selection.
+- Added `%reference_image_name%` placeholder for ComfyUI custom workflows. When the workflow contains this placeholder, Marinara uploads the reference image to ComfyUI's `input/` folder via `/upload/image` and substitutes the returned filename, so vanilla `LoadImage` nodes can use the reference without needing a base64 decode node. The existing `%reference_image%` placeholder still works for workflows that decode base64 themselves (e.g. via `ETN_LoadImageBase64`).
 
 ### Changed
 

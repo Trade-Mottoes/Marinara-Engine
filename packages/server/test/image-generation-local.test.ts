@@ -41,6 +41,96 @@ function readPngTextChunks(png: Buffer): Array<{ keyword: string; text: string }
   return chunks;
 }
 
+test("local ComfyUI uploads reference images for filename placeholders", async () => {
+  const imageBytes = Buffer.from(PNG_1X1_BASE64, "base64");
+  const referenceImage = `data:image/png;base64,${PNG_1X1_BASE64}`;
+  let uploadedFormBody = "";
+  let capturedPrompt: Record<string, { inputs?: Record<string, unknown> }> | null = null;
+  let port = 0;
+
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/upload/image") {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        uploadedFormBody = Buffer.concat(chunks).toString("latin1");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ name: "marinara-ref-uploaded.png" }));
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/prompt") {
+      let raw = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        raw += chunk;
+      });
+      req.on("end", () => {
+        capturedPrompt = (JSON.parse(raw) as { prompt: Record<string, { inputs?: Record<string, unknown> }> }).prompt;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ prompt_id: "prompt-1" }));
+      });
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/history/prompt-1") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          "prompt-1": {
+            outputs: {
+              "9": { images: [{ filename: "out.png", subfolder: "", type: "output" }] },
+            },
+          },
+        }),
+      );
+      return;
+    }
+
+    if (req.method === "GET" && req.url?.startsWith("/view?")) {
+      res.writeHead(200, { "content-type": "image/png" });
+      res.end(imageBytes);
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const addressInfo = server.address();
+  assert.ok(addressInfo && typeof addressInfo === "object");
+  port = addressInfo.port;
+
+  try {
+    const workflow = JSON.stringify({
+      "1": { class_type: "LoadImage", inputs: { image: "%reference_image_name%" } },
+      "2": { class_type: "ReferenceNote", inputs: { raw: "%reference_image%" } },
+      "9": { class_type: "SaveImage", inputs: { images: ["1", 0] } },
+    });
+
+    const result = await generateImage("comfyui", `http://127.0.0.1:${port}`, "", "comfyui", {
+      prompt: "test",
+      comfyWorkflow: workflow,
+      referenceImage,
+      allowLocalUrls: true,
+    });
+
+    assert.match(uploadedFormBody, /name="image"; filename="marinara-ref-[a-f0-9]{16}\.png"/);
+    assert.match(uploadedFormBody, /name="overwrite"/);
+    assert.match(uploadedFormBody, /\r\n\r\ntrue\r\n/);
+    assert.equal(capturedPrompt?.["1"]?.inputs?.image, "marinara-ref-uploaded.png");
+    assert.equal(capturedPrompt?.["2"]?.inputs?.raw, referenceImage);
+    assert.equal(result.base64, PNG_1X1_BASE64);
+    assert.equal(result.mimeType, "image/png");
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  }
+});
+
 test("local OpenAI-compatible image generation normalizes localhost URLs", async () => {
   const imageBytes = Buffer.from(PNG_1X1_BASE64, "base64");
   let port = 0;

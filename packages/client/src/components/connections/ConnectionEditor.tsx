@@ -314,8 +314,15 @@ export function ConnectionEditor() {
       { token: "%seed%", label: "%seed%", critical: false },
       { token: "%model%", label: "%model%", critical: false },
       { token: "%reference_image%", label: "%reference_image%", critical: false },
+      { token: "%reference_image_name%", label: "%reference_image_name%", critical: false },
     ];
-    const missing = KNOWN_SUBS.filter(({ token }) => !wf.includes(token));
+    const hasReferenceImage = wf.includes("%reference_image%");
+    const hasReferenceImageName = wf.includes("%reference_image_name%");
+    const missing = KNOWN_SUBS.filter(({ token }) => {
+      if (token === "%reference_image%" && hasReferenceImageName) return false;
+      if (token === "%reference_image_name%" && hasReferenceImage) return false;
+      return !wf.includes(token);
+    });
     return { parseError: false as const, missing };
   }, [localComfyuiWorkflow]);
 
@@ -1355,8 +1362,8 @@ export function ConnectionEditor() {
                 icon={<Zap size="0.875rem" className="text-sky-400" />}
                 help={
                   selectedImageService === "runpod_comfyui"
-                    ? "Paste your ComfyUI workflow JSON (API format). RunPod needs the full workflow to execute — the endpoint sends this workflow to your serverless endpoint. Use placeholders like %prompt%, %seed%, %width%, and %height% to let Marinara inject generation parameters."
-                    : "Paste a custom ComfyUI workflow JSON (API format). Use placeholders like %prompt%, %negative_prompt%, %width%, %height%, %seed%, %model%, %steps%, %cfg%, %sampler%, %scheduler%, and %denoise%. Leave empty to use the built-in default txt2img workflow."
+                    ? "Paste your ComfyUI workflow JSON (API format). RunPod needs the full workflow to execute; the endpoint sends this workflow to your serverless endpoint. Use placeholders like %prompt%, %seed%, %width%, %height%, and %reference_image% to let Marinara inject generation parameters."
+                    : "Paste a custom ComfyUI workflow JSON (API format). Use placeholders like %prompt%, %negative_prompt%, %width%, %height%, %seed%, %model%, %steps%, %cfg%, %sampler%, %scheduler%, and %denoise%. For reference images, use %reference_image% to inject a base64 string for workflows that decode it, or %reference_image_name% to upload the image to ComfyUI's input directory and inject the filename for a vanilla LoadImage node. Leave empty to use the built-in default txt2img workflow."
                 }
               >
                 <textarea
@@ -1415,8 +1422,8 @@ export function ConnectionEditor() {
                   )}
                 <p className="text-[0.55rem] text-[var(--muted-foreground)] mt-1">
                   Export your workflow from ComfyUI using <strong>Save (API Format)</strong> in the menu. Placeholders
-                  like <code>%prompt%</code>, <code>%steps%</code>, and <code>%sampler%</code> will be replaced at
-                  generation time.
+                  like <code>%prompt%</code>, <code>%steps%</code>, <code>%sampler%</code>, and reference-image
+                  placeholders will be replaced at generation time.
                 </p>
               </FieldGroup>
             )}
