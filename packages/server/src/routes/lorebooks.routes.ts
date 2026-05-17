@@ -22,7 +22,7 @@ import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js
 import { createChatsStorage } from "../services/storage/chats.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
-import { processLorebooks } from "../services/lorebook/index.js";
+import { estimateLorebookTokens, processLorebooks } from "../services/lorebook/index.js";
 import { resolveGameLorebookScopeExclusions } from "../services/lorebook/game-lorebook-scope.js";
 import { buildPromptMacroContext, resolveMacrosWithVariableSnapshot } from "../services/prompt/index.js";
 import {
@@ -595,8 +595,11 @@ export async function lorebooksRoutes(app: FastifyInstance) {
 
   // ── Scan chat for activated entries ──
 
-  app.get<{ Params: { chatId: string } }>("/scan/:chatId", async (req, reply) => {
+  app.get<{ Params: { chatId: string }; Querystring: { prepend?: string } }>("/scan/:chatId", async (req, reply) => {
     const { chatId } = req.params;
+    // ?prepend=<text> — optional draft text to scan ALONGSIDE the chat history.
+    // Lets the World Info panel preview "what would activate if I sent this".
+    const prependDraft = typeof req.query.prepend === "string" ? req.query.prepend : "";
     const chatsStorage = createChatsStorage(app.db);
     const chatMessages = await chatsStorage.listMessages(chatId);
     // CONST entries activate regardless of message content, so the scan
@@ -644,7 +647,31 @@ export async function lorebooksRoutes(app: FastifyInstance) {
       role: (m.role === "narrator" ? "system" : m.role) as string,
       content: typeof m.content === "string" ? m.content : "",
     }));
-    const lastInput = [...scanMessages].reverse().find((message) => message.role === "user")?.content;
+
+    // Extend the scan corpus with content that lands in every prompt but
+    // doesn't appear in the chat-messages stream: the user's typed-but-
+    // unsent draft (when ?prepend= is passed), Author's Notes, and the
+    // chat Summary. Without these, the panel would under-report — an
+    // entry whose keyword only appears in the Notes wouldn't show as
+    // active, even though it'd activate at generation time. All are
+    // injected as `system` role pseudo-messages so the scanner picks
+    // up their keywords without confusing the role-based recursion path.
+    if (prependDraft.trim()) {
+      scanMessages.push({ role: "user", content: prependDraft });
+    }
+    const authorNotes =
+      typeof chatMeta.authorNotes === "string" ? chatMeta.authorNotes.trim() : "";
+    if (authorNotes) {
+      scanMessages.push({ role: "system", content: authorNotes });
+    }
+    const chatSummary =
+      typeof chatMeta.summary === "string" ? chatMeta.summary.trim() : "";
+    if (chatSummary) {
+      scanMessages.push({ role: "system", content: chatSummary });
+    }
+
+    const lastInput =
+      prependDraft.trim() || [...scanMessages].reverse().find((message) => message.role === "user")?.content;
 
     const lorebookMacroResolvers = await (async () => {
       try {
@@ -696,9 +723,13 @@ export async function lorebooksRoutes(app: FastifyInstance) {
         typeof (chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) === "object"
           ? ((chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) as Record<
               string,
-              { ephemeral?: number | null; enabled?: boolean }
+              { ephemeral?: number | null; enabled?: boolean; pinned?: boolean }
             >)
           : undefined,
+      // The UI panel needs to see entries the user has disabled (greyed out)
+      // and entries the user has pinned (forced-active). Generation never sets
+      // this — disabled entries get filtered out pre-scan as normal.
+      includeDisabled: true,
       entryTimingStates:
         (chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) &&
         typeof (chatMeta.entryTimingStates ?? chatMeta.lorebookEntryTimingStates) === "object"
@@ -713,6 +744,19 @@ export async function lorebooksRoutes(app: FastifyInstance) {
     });
 
     const resolvedContentById = new Map(result.activatedEntries.map((entry) => [entry.id, entry.content]));
+    const matchedKeysById = new Map(result.activatedEntries.map((entry) => [entry.id, entry.matchedKeys]));
+
+    // Read the same overrides the panel-side will mutate, so we can flag each
+    // returned entry as user-enabled / user-pinned / etc. Defensive parsing in
+    // case the metadata isn't shaped as expected.
+    const overridesRaw =
+      (chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) &&
+      typeof (chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) === "object"
+        ? ((chatMeta.entryStateOverrides ?? chatMeta.lorebookEntryStateOverrides) as Record<
+            string,
+            { ephemeral?: number | null; enabled?: boolean; pinned?: boolean }
+          >)
+        : {};
 
     // Fetch full entry data for the activated IDs
     const activeEntries =
@@ -723,16 +767,43 @@ export async function lorebooksRoutes(app: FastifyInstance) {
         : [];
 
     return {
-      entries: activeEntries.map((e) => ({
-        id: (e as Record<string, unknown>).id,
-        name: (e as Record<string, unknown>).name,
-        content:
-          resolvedContentById.get(String((e as Record<string, unknown>).id)) ?? (e as Record<string, unknown>).content,
-        keys: (e as Record<string, unknown>).keys,
-        lorebookId: (e as Record<string, unknown>).lorebookId,
-        order: (e as Record<string, unknown>).order,
-        constant: (e as Record<string, unknown>).constant,
-      })),
+      entries: activeEntries.map((e) => {
+        const row = e as Record<string, unknown>;
+        const entryId = String(row.id);
+        const content = resolvedContentById.get(entryId) ?? (row.content as string | undefined) ?? "";
+        const matchedKeys = matchedKeysById.get(entryId) ?? [];
+        const ov = overridesRaw[entryId] ?? {};
+        // userEnabled  — false only when the user explicitly disabled it (default true)
+        // userPinned   — true only when the user explicitly pinned it
+        // scannerActivated — present in result means it activated (const, pin-as-const, or keyword)
+        // keywordMatched — keyword (not just const/pin) was the activation reason
+        // isInjecting  — what will actually reach the prompt next generation
+        const userEnabled = ov.enabled !== false;
+        const userPinned = ov.pinned === true;
+        const isConstantGlobal = row.constant === true;
+        const keywordMatched = matchedKeys.length > 0;
+        const scannerActivated = isConstantGlobal || userPinned || keywordMatched;
+        const isInjecting = userEnabled && scannerActivated;
+        return {
+          id: entryId,
+          name: row.name as string,
+          content,
+          keys: (row.keys as string[]) ?? [],
+          lorebookId: row.lorebookId as string,
+          order: (row.order as number) ?? 0,
+          constant: isConstantGlobal,
+          // Phase A: per-chat / per-entry diagnostic flags. UI consumes these
+          // to drive pin/disable affordances, the C/P/M reason pills, and
+          // honest token counts (sum only the isInjecting subset).
+          userEnabled,
+          userPinned,
+          scannerActivated,
+          keywordMatched,
+          isInjecting,
+          matchedKeys,
+          tokens: estimateLorebookTokens(content),
+        };
+      }),
       totalTokens: result.totalTokensEstimate,
       totalEntries: result.totalEntries,
       budgetSkippedEntries: result.budgetSkippedEntries,

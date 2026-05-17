@@ -1018,7 +1018,12 @@ function FilterPills({
 // leaves the drawer or fullscreen editor closes.
 // ─────────────────────────────────────────────────────
 
-function ExpandedDrawer({
+// Exported so the quick-edit modal in chat/ChatRoleplay/WorldInfoPanel.tsx
+// can reuse the same entry-edit form rendered inline for the route page.
+// The shared dependencies (FieldGroup, KeysEditor, helper fns, autosave
+// machinery) stay co-located here rather than being moved into a separate
+// file — see LorebookEntryEditor.tsx for the public-API alias.
+export function ExpandedDrawer({
   entry,
   lorebookId,
   characters,
