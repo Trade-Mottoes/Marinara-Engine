@@ -6283,6 +6283,51 @@ export async function generateRoutes(app: FastifyInstance) {
           );
           finalPromptSent = initialProviderMessages;
 
+          // ── Debug: prompt dumper (untracked diagnostic) ──
+          // Set MARINARA_DUMP_PROMPTS=1 to write each fully-assembled prompt to disk.
+          // Override location with MARINARA_DUMP_DIR (default: ~/marinara-debug/).
+          //
+          // Complementary to upstream's LOG_PRESET=prompt-connections (which
+          // is live log tailing): this writes greppable, persistent JSON files
+          // per prompt for forensic comparison across runs. Off by default;
+          // zero overhead when MARINARA_DUMP_PROMPTS is unset.
+          if (process.env.MARINARA_DUMP_PROMPTS) {
+            try {
+              const fs = await import("fs/promises");
+              const path = await import("path");
+              const os = await import("os");
+              const dumpDir = process.env.MARINARA_DUMP_DIR || path.join(os.homedir(), "marinara-debug");
+              await fs.mkdir(dumpDir, { recursive: true });
+              const ts = new Date().toISOString().replace(/[:.]/g, "-");
+              const file = path.join(dumpDir, `${ts}-${input.chatId.slice(0, 8)}-${chatMode}.json`);
+              await fs.writeFile(
+                file,
+                JSON.stringify(
+                  {
+                    timestamp: new Date().toISOString(),
+                    chatId: input.chatId,
+                    chatMode,
+                    presetId: presetId ?? null,
+                    enableAgents: chatEnableAgents,
+                    activeAgentIds: chatActiveAgentIds,
+                    activeLorebookIds: chatActiveLorebookIds,
+                    authorNotes: (chatMeta.authorNotes as string | undefined) ?? null,
+                    authorNotesDepth: (chatMeta.authorNotesDepth as number | undefined) ?? null,
+                    messageCount: initialProviderMessages.length,
+                    effectiveMaxTokens: effectiveMaxTokensForSend,
+                    effectiveMaxContext,
+                    messages: initialProviderMessages,
+                  },
+                  null,
+                  2,
+                ),
+              );
+              logger.debug("[debug] Prompt dumped: %s", file);
+            } catch (e) {
+              logger.warn(e, "[debug] Prompt dump failed");
+            }
+          }
+
           // Reset per-character accumulators
           fullResponse = "";
           fullThinking = "";
