@@ -13,6 +13,7 @@ export * from "./types/agent.js";
 export * from "./types/game-state.js";
 export * from "./types/combat-encounter.js";
 export * from "./types/scene.js";
+export * from "./types/author-notes.js";
 export * from "./types/vn.js";
 export * from "./types/persona.js";
 export * from "./types/regex.js";
