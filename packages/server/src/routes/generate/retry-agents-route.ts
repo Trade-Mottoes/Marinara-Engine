@@ -454,8 +454,13 @@ async function resolveRetryAgents(args: {
   const configs = await agentsStore.list();
   const enabledConfigs = configs.filter((config: any) => agentTypeSet.has(config.type));
   const resolvedTypeSet = new Set(enabledConfigs.map((config: any) => config.type));
+  // A user-toggled-off agent is a global kill switch — retry should respect it the same
+  // way the main resolution loop does, on both the DB-row path and the built-in fallback.
+  const disabledTypes = new Set(
+    enabledConfigs.filter((c: any) => c.enabled === "false").map((c: any) => c.type as string),
+  );
   const builtInFallbackConfigs = BUILT_IN_AGENTS.filter(
-    (agent) => agentTypeSet.has(agent.id) && !resolvedTypeSet.has(agent.id),
+    (agent) => agentTypeSet.has(agent.id) && !resolvedTypeSet.has(agent.id) && !disabledTypes.has(agent.id),
   );
 
   let connId = chat.connectionId;
@@ -514,6 +519,11 @@ async function resolveRetryAgents(args: {
     sidecarModelService.getConfig().useForTrackers && sidecarModelService.getConfiguredModelRef() !== null;
 
   for (const cfg of enabledConfigs) {
+    // Respect the global enabled toggle (mirrors generate.routes.ts main loop).
+    if ((cfg as any).enabled === "false") {
+      logger.info("[retry-agents] Skipping agent %s — globally disabled", (cfg as any).type);
+      continue;
+    }
     let agentProvider = provider;
     let agentModel = conn.model;
     let agentMaxParallelJobs = chatConnectionMaxParallelJobs;

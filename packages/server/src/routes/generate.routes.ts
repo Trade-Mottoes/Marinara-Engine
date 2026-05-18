@@ -3080,6 +3080,12 @@ export async function generateRoutes(app: FastifyInstance) {
         for (const cfg of enabledConfigs) {
           // If this chat has a per-chat agent list, only include agents in that list
           if (hasPerChatAgentList && !perChatAgentSet.has(cfg.type)) continue;
+          // Honour the global enabled flag set via the Agents panel toggle.
+          // Mirrors the panel's `!== "false"` default-enabled semantics.
+          if (cfg.enabled === "false") {
+            logger.info("[generate] Skipping agent %s — globally disabled", cfg.type);
+            continue;
+          }
           const settings = cfg.settings ? JSON.parse(cfg.settings as string) : {};
           let agentProvider = provider;
           let agentModel = conn.model;
@@ -3152,12 +3158,20 @@ export async function generateRoutes(app: FastifyInstance) {
           agentConnectionWarnings.push(buildLocalSidecarUnavailableWarning(skippedLocalSidecarAgents));
         }
 
-        // Built-in agents with no DB row → use defaults only if explicitly in the per-chat list
+        // Built-in agents with no DB row → use defaults only if explicitly in the per-chat list.
+        // An agent that the main loop skipped via `cfg.enabled === "false"` is intentionally
+        // absent from resolvedTypes — without filtering by disabledTypes here, this fallback
+        // would re-resolve it (with the default-for-agents connection), defeating the global
+        // toggle and triggering a misleading "agent is using default connection" warning.
         const resolvedTypes = new Set(resolvedAgents.map((a) => a.type));
+        const disabledTypes = new Set(
+          enabledConfigs.filter((c) => c.enabled === "false").map((c) => c.type),
+        );
         const builtInFallbacks =
           chatEnableAgents && hasPerChatAgentList
             ? BUILT_IN_AGENTS.filter((a) => {
                 if (resolvedTypes.has(a.id)) return false;
+                if (disabledTypes.has(a.id)) return false;
                 if (a.id === "chat-summary") return false;
                 return perChatAgentSet.has(a.id);
               })

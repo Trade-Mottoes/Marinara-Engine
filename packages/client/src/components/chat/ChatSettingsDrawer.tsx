@@ -209,6 +209,11 @@ type AvailableAgent = {
   category: string;
   phase: AgentPhase;
   builtIn: boolean;
+  // Reflects the global Agents-panel toggle. When true, the server skips
+  // this agent at run-time even if it's in the chat's active list. UI uses
+  // this to hide the agent from the add-to-chat picker and visually mark
+  // already-added rows as inert.
+  globallyDisabled: boolean;
 };
 
 type LorebookActiveReason = "Global" | "Character" | "Persona" | "Chat";
@@ -495,6 +500,7 @@ export function ChatSettingsDrawer({
         category: a.category,
         phase: a.phase,
         builtIn: true,
+        globallyDisabled: existing?.enabled === "false",
       });
     }
     // Custom agents from DB
@@ -508,6 +514,7 @@ export function ChatSettingsDrawer({
             category: "custom",
             phase: c.phase as AgentPhase,
             builtIn: false,
+            globallyDisabled: c.enabled === "false",
           });
         }
       }
@@ -4380,7 +4387,12 @@ export function ChatSettingsDrawer({
                         ).map((cat) => {
                           const catAgents = availableAgents.filter((a) => a.category === cat.key);
                           const activeInCat = catAgents.filter((a) => activeAgentIds.includes(a.id));
-                          const inactiveInCat = catAgents.filter((a) => !activeAgentIds.includes(a.id));
+                          // Hide globally-disabled agents from the add-to-chat picker —
+                          // adding them would be a no-op (server skips them) and offering
+                          // them suggests they'll work, which they won't.
+                          const inactiveInCat = catAgents.filter(
+                            (a) => !activeAgentIds.includes(a.id) && !a.globallyDisabled,
+                          );
                           if (catAgents.length === 0) return null;
                           return (
                             <AgentCategorySection
@@ -4475,10 +4487,23 @@ export function ChatSettingsDrawer({
                                     return (
                                       <div
                                         key={agent.id}
-                                        className="rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
+                                        className={cn(
+                                          "rounded-lg px-3 py-2 ring-1",
+                                          agent.globallyDisabled
+                                            ? "bg-[var(--muted-foreground)]/5 ring-[var(--muted-foreground)]/30 opacity-70"
+                                            : "bg-[var(--primary)]/10 ring-[var(--primary)]/30",
+                                        )}
                                       >
                                         <div className="flex items-start gap-2.5">
-                                          <Sparkles size="0.875rem" className="mt-0.5 shrink-0 text-[var(--primary)]" />
+                                          <Sparkles
+                                            size="0.875rem"
+                                            className={cn(
+                                              "mt-0.5 shrink-0",
+                                              agent.globallyDisabled
+                                                ? "text-[var(--muted-foreground)]"
+                                                : "text-[var(--primary)]",
+                                            )}
+                                          />
                                           <div className="min-w-0 flex-1">
                                             <div className="flex min-w-0 items-center gap-1.5">
                                               <span className="block min-w-0 truncate text-xs">{agent.name}</span>
@@ -4491,6 +4516,14 @@ export function ChatSettingsDrawer({
                                                 </span>
                                               ) : null}
                                             </div>
+                                            {agent.globallyDisabled && (
+                                              <span
+                                                className="mt-0.5 inline-block rounded-full bg-[var(--muted-foreground)]/15 px-1 py-0 text-[0.5rem] uppercase tracking-wide text-[var(--muted-foreground)]"
+                                                title="Disabled in the global Agents panel — this agent won't run for this chat. Re-enable it globally to use it here."
+                                              >
+                                                Disabled globally
+                                              </span>
+                                            )}
                                             <span className="mt-0.5 block text-[0.625rem] leading-tight text-[var(--muted-foreground)] line-clamp-2">
                                               {agent.description}
                                             </span>
@@ -4581,7 +4614,10 @@ export function ChatSettingsDrawer({
                           const customAgents = availableAgents.filter((a) => a.category === "custom");
                           if (customAgents.length === 0) return null;
                           const activeCustom = customAgents.filter((a) => activeAgentIds.includes(a.id));
-                          const inactiveCustom = customAgents.filter((a) => !activeAgentIds.includes(a.id));
+                          // Hide globally-disabled customs from the picker (see built-in branch above).
+                          const inactiveCustom = customAgents.filter(
+                            (a) => !activeAgentIds.includes(a.id) && !a.globallyDisabled,
+                          );
                           return (
                             <AgentCategorySection
                               label="Custom Agents"
@@ -4596,11 +4632,31 @@ export function ChatSettingsDrawer({
                                     return (
                                       <div
                                         key={agent.id}
-                                        className="flex items-center gap-2.5 rounded-lg bg-[var(--primary)]/10 px-3 py-2 ring-1 ring-[var(--primary)]/30"
+                                        className={cn(
+                                          "flex items-center gap-2.5 rounded-lg px-3 py-2 ring-1",
+                                          agent.globallyDisabled
+                                            ? "bg-[var(--muted-foreground)]/5 ring-[var(--muted-foreground)]/30 opacity-70"
+                                            : "bg-[var(--primary)]/10 ring-[var(--primary)]/30",
+                                        )}
                                       >
-                                        <Sparkles size="0.875rem" className="text-[var(--primary)]" />
+                                        <Sparkles
+                                          size="0.875rem"
+                                          className={
+                                            agent.globallyDisabled
+                                              ? "text-[var(--muted-foreground)]"
+                                              : "text-[var(--primary)]"
+                                          }
+                                        />
                                         <div className="flex-1 min-w-0">
                                           <span className="block truncate text-xs">{agent.name}</span>
+                                          {agent.globallyDisabled && (
+                                            <span
+                                              className="mt-0.5 inline-block rounded-full bg-[var(--muted-foreground)]/15 px-1 py-0 text-[0.5rem] uppercase tracking-wide text-[var(--muted-foreground)]"
+                                              title="Disabled in the global Agents panel — this agent won't run for this chat. Re-enable it globally to use it here."
+                                            >
+                                              Disabled globally
+                                            </span>
+                                          )}
                                         </div>
                                         {tokenEst != null ? (
                                           <span
